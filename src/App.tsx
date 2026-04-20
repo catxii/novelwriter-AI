@@ -71,8 +71,24 @@ type SkillsCenterPayload = {
 type ChapterDropPosition = 'before' | 'after'
 type ChapterKind = 'chapter' | 'special'
 type SpecialPageType = 'frontispiece' | 'prologue' | 'interlude' | 'afterword' | 'special'
+type WritingMode = 'novel' | 'script'
+type MemoryKind = 'info' | 'role'
 
-type Version = { id: number; title: string; draft: string; updatedAt: string }
+type VersionHistoryItem = {
+  id: number
+  draft: string
+  createdAt: string
+  createdAtMs: number
+}
+
+type Version = {
+  id: number
+  title: string
+  draft: string
+  updatedAt: string
+  history: VersionHistoryItem[]
+  historyLastSavedAtMs: number
+}
 type Chapter = {
   id: number
   kind: ChapterKind
@@ -92,6 +108,7 @@ type BackupItem = {
 
 type MemoryItem = {
   id: number
+  kind: MemoryKind
   text: string
   chapterId: number
   chapterTitle: string
@@ -106,7 +123,12 @@ type LegacyChapter = {
   specialType?: SpecialPageType
   title?: string
   draft?: string
-  versions?: Array<Partial<Version>>
+  versions?: Array<
+    Partial<Version> & {
+      history?: Array<Partial<VersionHistoryItem>>
+      historyLastSavedAtMs?: number
+    }
+  >
   activeVersionId?: number
 }
 
@@ -114,6 +136,7 @@ type WorkspaceData = {
   chapters?: LegacyChapter[]
   activeChapterId?: number
   memory?: Array<string | Partial<MemoryItem>>
+  writingMode?: WritingMode
   backups?: Array<Partial<BackupItem>>
   config?: Partial<ProviderConfig>
   customPrompt?: string
@@ -126,6 +149,7 @@ type WorkspaceData = {
 type NormalizedWorkspace = {
   chapters: Chapter[]
   activeChapterId: number
+  writingMode: WritingMode
   memory: MemoryItem[]
   backups: BackupItem[]
   config: ProviderConfig
@@ -191,6 +215,8 @@ const VERSION_TAB_BASE_WIDTH = 132
 const VERSION_TAB_CHAR_WIDTH = 14
 const VERSION_TAB_CLOSE_WIDTH = 18
 const VERSION_ADD_BUTTON_WIDTH = 112
+const VERSION_HISTORY_LIMIT = 10
+const VERSION_HISTORY_INTERVAL_MS = 4 * 60 * 60 * 1000
 const EDITOR_MENU_WIDTH = 260
 const EDITOR_MENU_HEIGHT = 400
 const EDITOR_THEME_ID = 'novelwriter-dark'
@@ -278,12 +304,60 @@ function pickPreferredOllamaModel(currentModel: string, models: string[]) {
   return models[0] ?? ''
 }
 
-const buildVersion = (id: number, index: number, draft: string, updatedAt = nowLabel()): Version => ({
-  id,
-  title: `版本${index}`,
-  draft,
-  updatedAt
-})
+function normalizeHistoryItems(items: unknown): VersionHistoryItem[] {
+  if (!Array.isArray(items) || items.length === 0) return []
+  return items
+    .map((item, index) => {
+      if (!item || typeof item !== 'object') return null
+      const raw = item as Partial<VersionHistoryItem>
+      const draft = typeof raw.draft === 'string' ? raw.draft : ''
+      const createdAt =
+        typeof raw.createdAt === 'string' && raw.createdAt.trim()
+          ? raw.createdAt
+          : nowLabel()
+      const createdAtMs =
+        typeof raw.createdAtMs === 'number' && Number.isFinite(raw.createdAtMs)
+          ? raw.createdAtMs
+          : Date.now() + index
+      const id =
+        typeof raw.id === 'number' && Number.isFinite(raw.id) ? raw.id : createdAtMs + index
+      return {
+        id,
+        draft,
+        createdAt,
+        createdAtMs
+      }
+    })
+    .filter((item): item is VersionHistoryItem => item !== null)
+    .sort((a, b) => a.createdAtMs - b.createdAtMs)
+    .slice(-VERSION_HISTORY_LIMIT)
+}
+
+function buildVersion(
+  id: number,
+  index: number,
+  draft: string,
+  updatedAt = nowLabel(),
+  history: VersionHistoryItem[] = [],
+  historyLastSavedAtMs?: number
+): Version {
+  const normalizedHistory = normalizeHistoryItems(history)
+  const fallbackSavedAt =
+    normalizedHistory.length > 0
+      ? normalizedHistory[normalizedHistory.length - 1].createdAtMs
+      : Date.now()
+  return {
+    id,
+    title: `版本${index}`,
+    draft,
+    updatedAt,
+    history: normalizedHistory,
+    historyLastSavedAtMs:
+      typeof historyLastSavedAtMs === 'number' && Number.isFinite(historyLastSavedAtMs)
+        ? historyLastSavedAtMs
+        : fallbackSavedAt
+  }
+}
 
 function withOrderedChapterTitles(items: Chapter[]) {
   let chapterIndex = 0
@@ -380,18 +454,31 @@ function normalizeChapter(input: LegacyChapter, index: number): Chapter {
       : fallbackTitle
 
   if (Array.isArray(input.versions) && input.versions.length > 0) {
-    const versions: Version[] = input.versions.map((version, versionIndex) => ({
-      id: typeof version.id === 'number' ? version.id : versionIndex + 1,
-      title:
-        typeof version.title === 'string' && version.title.trim()
-          ? version.title
-          : `版本${versionIndex + 1}`,
-      draft: typeof version.draft === 'string' ? version.draft : '',
-      updatedAt:
-        typeof version.updatedAt === 'string' && version.updatedAt.trim()
-          ? version.updatedAt
-          : nowLabel()
-    }))
+    const versions: Version[] = input.versions.map((version, versionIndex) => {
+      const normalizedHistory = normalizeHistoryItems(version.history)
+      const fallbackSavedAt =
+        normalizedHistory.length > 0
+          ? normalizedHistory[normalizedHistory.length - 1].createdAtMs
+          : Date.now()
+      return {
+        id: typeof version.id === 'number' ? version.id : versionIndex + 1,
+        title:
+          typeof version.title === 'string' && version.title.trim()
+            ? version.title
+            : `版本${versionIndex + 1}`,
+        draft: typeof version.draft === 'string' ? version.draft : '',
+        updatedAt:
+          typeof version.updatedAt === 'string' && version.updatedAt.trim()
+            ? version.updatedAt
+            : nowLabel(),
+        history: normalizedHistory,
+        historyLastSavedAtMs:
+          typeof version.historyLastSavedAtMs === 'number' &&
+          Number.isFinite(version.historyLastSavedAtMs)
+            ? version.historyLastSavedAtMs
+            : fallbackSavedAt
+      }
+    })
     const activeVersionId =
       typeof input.activeVersionId === 'number' &&
       versions.some((version) => version.id === input.activeVersionId)
@@ -433,6 +520,7 @@ function createDefaultWorkspace(): NormalizedWorkspace {
   return {
     chapters: [firstChapter],
     activeChapterId: firstChapter.id,
+    writingMode: 'novel',
     memory: [],
     backups: [],
     config: createDefaultConfig(),
@@ -447,6 +535,7 @@ function toWorkspaceData(snapshot: NormalizedWorkspace): WorkspaceData {
   return {
     chapters: snapshot.chapters,
     activeChapterId: snapshot.activeChapterId,
+    writingMode: snapshot.writingMode,
     memory: snapshot.memory,
     backups: snapshot.backups,
     config: snapshot.config,
@@ -517,6 +606,12 @@ function normalizeWorkspaceData(parsed: WorkspaceData): NormalizedWorkspace | nu
               typeof entry === 'object' && entry && typeof entry.id === 'number'
                 ? entry.id
                 : Date.now() + index,
+            kind:
+              typeof entry === 'object' &&
+              entry &&
+              (entry.kind === 'role' || entry.kind === 'info')
+                ? entry.kind
+                : 'info',
             text: text.trim(),
             chapterId: chapter.id,
             chapterTitle: chapter.title,
@@ -590,6 +685,7 @@ function normalizeWorkspaceData(parsed: WorkspaceData): NormalizedWorkspace | nu
   return {
     chapters,
     activeChapterId,
+    writingMode: parsed.writingMode === 'script' ? 'script' : 'novel',
     memory,
     backups,
     config,
@@ -701,6 +797,10 @@ function App() {
   const [appLanguage, setAppLanguage] = useState<AppLanguage>('zh-CN')
   const [projectStorageDir, setProjectStorageDir] = useState('')
   const [isApplyingProjectSettings, setIsApplyingProjectSettings] = useState(false)
+  const [projectSettingsNotice, setProjectSettingsNotice] = useState<{
+    kind: 'success' | 'error'
+    message: string
+  } | null>(null)
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null)
   const [pendingDeleteProject, setPendingDeleteProject] = useState<ProjectMeta | null>(null)
   const [deleteProjectConfirmName, setDeleteProjectConfirmName] = useState('')
@@ -709,6 +809,7 @@ function App() {
     withOrderedChapterTitles(initialWorkspace.chapters)
   )
   const [activeChapterId, setActiveChapterId] = useState(initialWorkspace.activeChapterId)
+  const [writingMode, setWritingMode] = useState<WritingMode>(initialWorkspace.writingMode)
   const [memory, setMemory] = useState<MemoryItem[]>(initialWorkspace.memory)
   const [backups, setBackups] = useState<BackupItem[]>(initialWorkspace.backups)
   const [config, setConfig] = useState<ProviderConfig>(initialWorkspace.config)
@@ -749,8 +850,11 @@ function App() {
   const [editingSkillId, setEditingSkillId] = useState<string | null>(null)
   const [editingSkillName, setEditingSkillName] = useState('')
   const [memorySearchQuery, setMemorySearchQuery] = useState('')
+  const [memoryModule, setMemoryModule] = useState<MemoryKind>('info')
   const [backupSearchQuery, setBackupSearchQuery] = useState('')
   const [isAdvancedSettingsOpen, setIsAdvancedSettingsOpen] = useState(false)
+  const [isVersionHistoryOpen, setIsVersionHistoryOpen] = useState(false)
+  const [selectedHistoryId, setSelectedHistoryId] = useState<number | null>(null)
 
   const activeProject = useMemo(
     () => projects.find((project) => project.id === activeProjectId) ?? null,
@@ -769,6 +873,13 @@ function App() {
     )
   }, [activeChapter])
   const currentDraft = activeVersion?.draft ?? ''
+  const currentVersionHistory = activeVersion?.history ?? []
+  const orderedVersionHistory = useMemo(
+    () => [...currentVersionHistory].sort((a, b) => b.createdAtMs - a.createdAtMs),
+    [currentVersionHistory]
+  )
+  const selectedHistoryItem =
+    orderedVersionHistory.find((item) => item.id === selectedHistoryId) ?? orderedVersionHistory[0] ?? null
   const connectionStatusLabel =
     connectionState === 'connected'
       ? '已连接'
@@ -828,12 +939,13 @@ function App() {
   )
   const filteredMemory = useMemo(() => {
     const keyword = memorySearchQuery.trim().toLowerCase()
-    if (!keyword) return memory
-    return memory.filter((item) => {
+    const scoped = memory.filter((item) => item.kind === memoryModule)
+    if (!keyword) return scoped
+    return scoped.filter((item) => {
       const haystack = `${item.text}\n${item.chapterTitle}\n${item.versionTitle}`.toLowerCase()
       return haystack.includes(keyword)
     })
-  }, [memory, memorySearchQuery])
+  }, [memory, memorySearchQuery, memoryModule])
   const filteredBackups = useMemo(() => {
     const keyword = backupSearchQuery.trim().toLowerCase()
     if (!keyword) return backups
@@ -861,6 +973,7 @@ function App() {
     return {
       chapters,
       activeChapterId,
+      writingMode,
       memory,
       backups,
       config,
@@ -874,6 +987,7 @@ function App() {
   function applyWorkspaceSnapshot(snapshot: NormalizedWorkspace) {
     setChapters(withOrderedChapterTitles(snapshot.chapters))
     setActiveChapterId(snapshot.activeChapterId)
+    setWritingMode(snapshot.writingMode)
     setMemory(snapshot.memory)
     setBackups(snapshot.backups)
     setConfig(snapshot.config)
@@ -886,6 +1000,7 @@ function App() {
     setError('')
     setConnectionState('unknown')
     setMemorySearchQuery('')
+    setMemoryModule('info')
     setBackupSearchQuery('')
     setIsAdvancedSettingsOpen(false)
   }
@@ -1030,9 +1145,18 @@ function App() {
       setAppLanguage(response.settings.language)
       setProjectStorageDir(response.settings.projectsDir)
       setStatus('项目设置已更新')
+      setProjectSettingsNotice({
+        kind: 'success',
+        message: t('设置保存成功', 'Settings saved successfully')
+      })
     } catch (err) {
-      setError(err instanceof Error ? err.message : '更新设置失败')
+      const message = err instanceof Error ? err.message : '更新设置失败'
+      setError(message)
       setStatus('更新设置失败')
+      setProjectSettingsNotice({
+        kind: 'error',
+        message: `${t('设置保存失败', 'Failed to save settings')}${message ? `：${message}` : ''}`
+      })
     } finally {
       setIsApplyingProjectSettings(false)
     }
@@ -1105,6 +1229,14 @@ function App() {
       cancelled = true
     }
   }, [])
+
+  useEffect(() => {
+    if (!projectSettingsNotice) return
+    const timer = window.setTimeout(() => {
+      setProjectSettingsNotice(null)
+    }, 2600)
+    return () => window.clearTimeout(timer)
+  }, [projectSettingsNotice])
 
   useEffect(() => {
     if (projects.length > 0 || !legacyWorkspace) return
@@ -1262,6 +1394,19 @@ function App() {
   }, [isOverflowMenuVisible])
 
   useEffect(() => {
+    if (!isVersionHistoryOpen) return
+    if (!orderedVersionHistory.length) {
+      setSelectedHistoryId(null)
+      return
+    }
+    setSelectedHistoryId((previous) =>
+      previous && orderedVersionHistory.some((item) => item.id === previous)
+        ? previous
+        : orderedVersionHistory[0].id
+    )
+  }, [isVersionHistoryOpen, orderedVersionHistory])
+
+  useEffect(() => {
     if (!isAddPageMenuOpen) return
 
     const onPointerDown = (event: MouseEvent) => {
@@ -1374,8 +1519,24 @@ function App() {
       disabled: isRunning || !canRunSelectionActions
     },
     {
+      key: 'role-memory',
+      label: '5 角色',
+      shortcut: '',
+      run: () => {
+        const input = (selectedSnippet || readSelectedTextFromEditor()).trim()
+        if (!input) return
+        const roleNames = writingMode === 'script' ? extractRoleNamesFromDraft(input) : []
+        const items = roleNames.length > 0 ? roleNames : input.split('\n')
+        appendMemoryItems(items, 'role')
+        setActivePanel('memory')
+        setMemoryModule('role')
+        setStatus('已保存到角色')
+      },
+      disabled: isRunning || !canRunSelectionActions
+    },
+    {
       key: 'backup',
-      label: '5 加入参考',
+      label: '6 加入参考',
       shortcut: '',
       run: () => {
         const input = (selectedSnippet || readSelectedTextFromEditor()).trim()
@@ -1646,6 +1807,33 @@ function App() {
     return nextId
   }
 
+  function maybeAppendVersionHistory(version: Version, nextDraft: string) {
+    if (version.draft === nextDraft) return version
+    const nowMs = Date.now()
+    if (nowMs - version.historyLastSavedAtMs < VERSION_HISTORY_INTERVAL_MS) {
+      return {
+        ...version,
+        draft: nextDraft,
+        updatedAt: nowLabel()
+      }
+    }
+
+    const nextHistoryItem: VersionHistoryItem = {
+      id: nowMs,
+      draft: nextDraft,
+      createdAt: nowLabel(),
+      createdAtMs: nowMs
+    }
+    const nextHistory = [...version.history, nextHistoryItem].slice(-VERSION_HISTORY_LIMIT)
+    return {
+      ...version,
+      draft: nextDraft,
+      updatedAt: nowLabel(),
+      history: nextHistory,
+      historyLastSavedAtMs: nowMs
+    }
+  }
+
   function updateActiveDraft(nextDraft: string) {
     setChapters((previous) =>
       previous.map((chapter) => {
@@ -1654,14 +1842,13 @@ function App() {
           ...chapter,
           versions: chapter.versions.map((version) =>
             version.id === chapter.activeVersionId
-              ? version.draft === nextDraft
-                ? version
-                : { ...version, draft: nextDraft, updatedAt: nowLabel() }
+              ? maybeAppendVersionHistory(version, nextDraft)
               : version
           )
         }
       })
     )
+    syncScriptRolesToMemory(nextDraft)
   }
 
   function readSelectedTextFromEditor() {
@@ -2023,7 +2210,7 @@ function App() {
     )
   }
 
-  function appendMemoryItems(items: string[]) {
+  function appendMemoryItems(items: string[], kind: MemoryKind = 'info') {
     const normalized = items
       .map((item) => item.replace(/^[-*\d.\s]+/, '').trim())
       .filter(Boolean)
@@ -2040,16 +2227,18 @@ function App() {
 
     setMemory((previous) => {
       const existing = new Set(
-        previous.map((item) => `${item.chapterId}:${item.versionId}:${item.text}`)
+        previous.map((item) => `${item.kind}:${item.chapterId}:${item.versionId}:${item.text}`)
       )
       const merged = [...previous]
       let nextId = previous.reduce((max, item) => Math.max(max, item.id), 0) + 1
+      let changed = false
       for (const text of normalized) {
-        const key = `${chapter.id}:${version.id}:${text}`
+        const key = `${kind}:${chapter.id}:${version.id}:${text}`
         if (existing.has(key)) continue
         existing.add(key)
         merged.push({
           id: nextId,
+          kind,
           text,
           chapterId: chapter.id,
           chapterTitle: chapter.title,
@@ -2057,10 +2246,31 @@ function App() {
           versionTitle: version.title,
           createdAt
         })
+        changed = true
         nextId += 1
       }
-      return merged
+      return changed ? merged : previous
     })
+  }
+
+  function extractRoleNamesFromDraft(draft: string) {
+    const roleNames: string[] = []
+    const roleRegex = /^\s*([^|\n]{1,32})\|/gm
+    for (const match of draft.matchAll(roleRegex)) {
+      const raw = String(match[1] || '').trim()
+      if (!raw) continue
+      const normalized = raw.replace(/^[：:【\[]+|[】\]]+$/g, '').trim()
+      if (!normalized) continue
+      roleNames.push(normalized)
+    }
+    return [...new Set(roleNames)]
+  }
+
+  function syncScriptRolesToMemory(draft: string) {
+    if (writingMode !== 'script') return
+    const roleNames = extractRoleNamesFromDraft(draft)
+    if (!roleNames.length) return
+    appendMemoryItems(roleNames, 'role')
   }
 
   function jumpToMemory(memoryItem: MemoryItem) {
@@ -2081,6 +2291,7 @@ function App() {
       )
     )
     setActiveChapterId(chapter.id)
+    setMemoryModule(memoryItem.kind)
     clearSelectionState()
     setStatus(`已跳转到 ${chapter.title} / ${version.title}`)
   }
@@ -2088,7 +2299,9 @@ function App() {
   async function askModel(instruction: string, input: string) {
     const provider = config.kind
     const baseUrl = normalizeBaseUrl(config.baseUrl, provider)
-    const memoryItems = memory.map((item) => item.text)
+    const memoryItems = memory.map((item) =>
+      item.kind === 'role' ? `角色：${item.text}` : item.text
+    )
     const sessionId = ensureCurrentSessionId()
 
     if (window.novelDesktopApi?.generate && sessionId) {
@@ -2189,8 +2402,9 @@ function App() {
         setStatus('未从选中文本提取到记忆')
         return
       }
-      appendMemoryItems(items)
+      appendMemoryItems(items, 'info')
       setActivePanel('memory')
+      setMemoryModule('info')
       setStatus('已保存到记忆')
       return
     }
@@ -2424,8 +2638,21 @@ function App() {
                       onChange={(event) => setProjectStorageDir(event.target.value)}
                       placeholder={t('输入本地目录路径', 'Enter local directory path')}
                     />
-                    <button className="text-button" onClick={() => void pickProjectStorageDir()}>
-                      {t('选择目录', 'Browse')}
+                    <button
+                      className="text-button project-storage-pick-button"
+                      onClick={() => void pickProjectStorageDir()}
+                      title={t('选择目录', 'Browse')}
+                      aria-label={t('选择目录', 'Browse')}
+                    >
+                      <svg
+                        className="project-storage-pick-icon"
+                        viewBox="0 0 24 24"
+                        aria-hidden="true"
+                        focusable="false"
+                      >
+                        <path d="M10 4l2 2h8v12H4V4h6z" />
+                        <path d="M4 9h16" />
+                      </svg>
                     </button>
                   </div>
                 </label>
@@ -2444,6 +2671,14 @@ function App() {
                     ? t('保存中...', 'Saving...')
                     : t('保存设置', 'Save Settings')}
                 </button>
+                {projectSettingsNotice && (
+                  <p
+                    className={`project-settings-notice ${projectSettingsNotice.kind === 'success' ? 'is-success' : 'is-error'}`}
+                    role="status"
+                  >
+                    {projectSettingsNotice.message}
+                  </p>
+                )}
               </div>
             ) : (
               <p className="panel-note-tip project-settings-note">
@@ -2826,11 +3061,51 @@ function App() {
         <div className="workspace">
           <section className="editor-pane" aria-label="正文编辑器">
             <div className="editor-toolbar">
-              <div>
+              <div className="editor-toolbar-main">
                 <span>正文</span>
-                <strong>
-                  {activeChapter?.title ?? '第1章'} / {activeVersion?.title ?? '版本1'}
-                </strong>
+                <div className="editor-version-row">
+                  <strong>
+                    {activeChapter?.title ?? '第1章'} / {activeVersion?.title ?? '版本1'}
+                  </strong>
+                  <span className="editor-version-divider" aria-hidden="true" />
+                  <div className="editor-version-actions">
+                    <button
+                      className={`version-history-button ${isVersionHistoryOpen ? 'active' : ''}`}
+                      type="button"
+                      onClick={() => setIsVersionHistoryOpen((previous) => !previous)}
+                      title="查看历史版本"
+                      aria-label="查看历史版本"
+                    >
+                      👁
+                    </button>
+                    <div className="writing-mode-switch" role="group" aria-label="写作模式">
+                      <button
+                        className={writingMode === 'novel' ? 'active' : ''}
+                        type="button"
+                        onClick={() => {
+                          setWritingMode('novel')
+                          setStatus('已切换到小说模式')
+                        }}
+                      >
+                        小说模式
+                      </button>
+                      <button
+                        className={writingMode === 'script' ? 'active' : ''}
+                        type="button"
+                        onClick={() => {
+                          setWritingMode('script')
+                          syncScriptRolesToMemory(currentDraft)
+                          setStatus('已切换到剧本模式')
+                        }}
+                      >
+                        剧本模式
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                {writingMode === 'script' && (
+                  <span className="script-mode-tip">输入“角色名|”会自动同步到记忆库的角色模块</span>
+                )}
                 {activeVersion?.updatedAt ? (
                   <span className="version-inline-time">路 {activeVersion.updatedAt}</span>
                 ) : null}
@@ -2861,6 +3136,56 @@ function App() {
                 </div>
               </dl>
             </div>
+
+            {isVersionHistoryOpen && (
+              <div
+                className="version-history-overlay"
+                onMouseDown={(event) => {
+                  if (event.target === event.currentTarget) setIsVersionHistoryOpen(false)
+                }}
+              >
+                <div className="version-history-panel" onMouseDown={(event) => event.stopPropagation()}>
+                  <header>
+                    <strong>
+                      历史版本：{activeChapter?.title ?? '第1章'} / {activeVersion?.title ?? '版本1'}
+                    </strong>
+                    <button
+                      className="text-button"
+                      type="button"
+                      onClick={() => setIsVersionHistoryOpen(false)}
+                    >
+                      关闭
+                    </button>
+                  </header>
+                  <p>仅自动保存当前正在编辑的版本，每 4 小时保存一次，最多保留 10 条。</p>
+                  {orderedVersionHistory.length > 0 ? (
+                    <>
+                      <ul className="version-history-list">
+                        {orderedVersionHistory.map((item) => (
+                          <li key={item.id}>
+                            <button
+                              className={selectedHistoryItem?.id === item.id ? 'active' : ''}
+                              type="button"
+                              onClick={() => setSelectedHistoryId(item.id)}
+                            >
+                              <strong>{item.createdAt}</strong>
+                              <span>{item.draft.slice(0, 70) || '（空内容）'}</span>
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                      <textarea
+                        className="version-history-preview"
+                        readOnly
+                        value={selectedHistoryItem?.draft ?? ''}
+                      />
+                    </>
+                  ) : (
+                    <p className="empty-tip">暂无历史版本</p>
+                  )}
+                </div>
+              </div>
+            )}
 
             <div className="code-editor">
               <MonacoEditor
@@ -2951,8 +3276,24 @@ function App() {
                   <h2>共享记忆库</h2>
                 </div>
                 <p className="panel-note-tip">
-                  记忆会在每次生成时附加给模型，并进入当前章节会话上下文，适合存放世界观、人物设定和长期约束。
+                  信息记忆会在每次生成时附加给模型；角色模块用于统一管理出场角色。
                 </p>
+                <div className="memory-module-tabs">
+                  <button
+                    className={memoryModule === 'info' ? 'active' : ''}
+                    type="button"
+                    onClick={() => setMemoryModule('info')}
+                  >
+                    信息记忆
+                  </button>
+                  <button
+                    className={memoryModule === 'role' ? 'active' : ''}
+                    type="button"
+                    onClick={() => setMemoryModule('role')}
+                  >
+                    角色
+                  </button>
+                </div>
                 <div className="memory-search-row">
                   <button
                     className="text-button"
@@ -2970,7 +3311,11 @@ function App() {
                     type="text"
                     value={memorySearchQuery}
                     onChange={(event) => setMemorySearchQuery(event.target.value)}
-                    placeholder="输入关键词实时搜索全部记忆"
+                    placeholder={
+                      memoryModule === 'role'
+                        ? '输入关键词实时搜索角色'
+                        : '输入关键词实时搜索信息记忆'
+                    }
                   />
                 </div>
                 <ul className="memory-list">
@@ -2987,6 +3332,7 @@ function App() {
                           }}
                         >
                           {item.chapterTitle} / {item.versionTitle}
+                          <em>{item.kind === 'role' ? '角色' : '信息'}</em>
                         </button>
                         <textarea
                           value={item.text}
@@ -3019,7 +3365,13 @@ function App() {
                 </ul>
                 {!filteredMemory.length && (
                   <p className="empty-tip">
-                    {memorySearchQuery.trim() ? '没有匹配的记忆。' : '暂无记忆。'}
+                    {memorySearchQuery.trim()
+                      ? memoryModule === 'role'
+                        ? '没有匹配的角色。'
+                        : '没有匹配的信息记忆。'
+                      : memoryModule === 'role'
+                        ? '暂无角色。'
+                        : '暂无信息记忆。'}
                   </p>
                 )}
                 <button
@@ -3038,7 +3390,8 @@ function App() {
                         ...previous,
                         {
                           id: nextId,
-                          text: '新记忆：',
+                          kind: memoryModule,
+                          text: memoryModule === 'role' ? '新角色' : '新记忆：',
                           chapterId: chapter.id,
                           chapterTitle: chapter.title,
                           versionId: version.id,
@@ -3049,7 +3402,7 @@ function App() {
                     })
                   }}
                 >
-                  新增记忆
+                  {memoryModule === 'role' ? '新增角色' : '新增记忆'}
                 </button>
               </section>
             )}

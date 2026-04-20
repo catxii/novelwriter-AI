@@ -220,8 +220,49 @@ button:disabled {
   min-width: 0;
 }
 
+.project-storage-pick-button {
+  flex: 0 0 auto;
+  width: 42px;
+  min-height: 38px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+}
+
+.project-storage-pick-icon {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .project-settings-note {
   margin: 0;
+}
+
+.project-settings-notice {
+  margin: 0;
+  min-height: 36px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.project-settings-notice.is-success {
+  border-color: rgba(59, 148, 102, 0.36);
+  background: rgba(59, 148, 102, 0.12);
+  color: #2f7f57;
+}
+
+.project-settings-notice.is-error {
+  border-color: rgba(206, 76, 56, 0.35);
+  background: rgba(206, 76, 56, 0.12);
+  color: #aa3221;
 }
 
 .project-list {
@@ -328,19 +369,20 @@ button:disabled {
 .rail-back-button {
   width: 108px;
   min-height: 34px;
-  border: 2px solid #aeb5bc;
+  border: 1px solid rgba(23, 23, 23, 0.2);
   border-radius: var(--radius);
-  background: rgba(255, 255, 255, 0.76);
-  color: #66727c;
+  background: rgba(255, 255, 255, 0.88);
+  color: #4e565e;
   font-size: 13px;
   line-height: 1;
   padding: 7px 8px;
+  margin-bottom: 10px;
 }
 
 .rail-back-button:hover {
-  border-color: #939ba4;
-  background: rgba(255, 255, 255, 0.95);
-  color: #4d5962;
+  border-color: var(--accent);
+  background: #ffffff;
+  color: var(--accent-dark);
 }
 
 .rail-button {
@@ -350,10 +392,10 @@ button:disabled {
   place-items: center;
   position: relative;
   cursor: grab;
-  border: 2px solid #aeb5bc;
+  border: 1px solid rgba(23, 23, 23, 0.2);
   border-radius: var(--radius);
-  background: rgba(255, 255, 255, 0.7);
-  color: #6f7e89;
+  background: rgba(255, 255, 255, 0.86);
+  color: #62707b;
   transition:
     transform 160ms ease,
     background 160ms ease,
@@ -365,9 +407,9 @@ button:disabled {
 
 .rail-button:not(.active):hover {
   transform: translateX(4px);
-  background: rgba(255, 255, 255, 0.9);
-  border-color: #939ba4;
-  color: #5f6b75;
+  background: #ffffff;
+  border-color: rgba(23, 23, 23, 0.34);
+  color: #535f69;
 }
 
 .rail-button.active {
@@ -439,6 +481,7 @@ button:disabled {
   cursor: pointer;
   border-color: var(--accent);
   color: var(--accent);
+  background: rgba(255, 255, 255, 0.95);
 }
 
 .rail-button-plus:hover {
@@ -460,9 +503,9 @@ button:disabled {
 }
 
 .rail-add-trigger {
-  border: 2px solid var(--accent);
+  border: 1px solid var(--accent);
   border-radius: var(--radius);
-  background: rgba(227, 59, 36, 0.08);
+  background: rgba(255, 255, 255, 0.95);
   color: var(--accent);
   font-size: 12px;
   line-height: 1;
@@ -544,7 +587,7 @@ button:disabled {
   z-index: 60;
   min-height: 40px;
   display: grid;
-  grid-template-columns: minmax(220px, auto) 1fr auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 18px;
   padding: 6px 14px 6px 146px;
@@ -554,6 +597,10 @@ button:disabled {
 }
 
 .brand {
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  transform: translateY(-50%);
   display: flex;
   align-items: center;
   gap: 10px;
@@ -591,6 +638,7 @@ button:disabled {
   gap: 2px;
   min-width: 0;
   overflow-x: auto;
+  justify-self: start;
 }
 
 .menu-bar nav button {
@@ -607,6 +655,7 @@ button:disabled {
 }
 
 .window-status {
+  justify-self: end;
   color: var(--muted);
   font-size: 12px;
   white-space: nowrap;
@@ -806,14 +855,69 @@ button:disabled {
   color: var(--editor-muted);
 }
 
+.editor-toolbar-main {
+  min-width: 0;
+}
+
 .editor-toolbar span {
   display: block;
   font-size: 12px;
 }
 
+.editor-version-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 3px;
+  flex-wrap: wrap;
+}
+
+.editor-version-divider {
+  width: 1px;
+  height: 24px;
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.editor-version-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.writing-mode-switch {
+  display: inline-flex;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.writing-mode-switch button {
+  min-width: 80px;
+  border: 0;
+  border-right: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(50, 61, 73, 0.82);
+  color: #c8d2d9;
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+.writing-mode-switch button:last-child {
+  border-right: 0;
+}
+
+.writing-mode-switch button:hover {
+  background: rgba(227, 59, 36, 0.2);
+  color: #ffe3cc;
+}
+
+.writing-mode-switch button.active {
+  background: rgba(227, 59, 36, 0.9);
+  color: #fff;
+}
+
 .editor-toolbar strong {
   display: inline;
-  margin-top: 3px;
   color: #f3f6f7;
   font-size: 15px;
   font-weight: 600;
@@ -828,6 +932,123 @@ button:disabled {
   color: var(--editor-muted);
   font-size: 12px;
   font-weight: 500;
+}
+
+.script-mode-tip {
+  margin-top: 6px;
+  color: #9db0bf;
+  font-size: 11px;
+}
+
+.version-history-button {
+  width: 28px;
+  height: 28px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  background: rgba(45, 56, 67, 0.85);
+  color: #cfd8df;
+  padding: 0;
+}
+
+.version-history-button:hover,
+.version-history-button.active {
+  border-color: #f08b35;
+  color: #ffe1c6;
+  background: rgba(227, 59, 36, 0.2);
+}
+
+.version-history-overlay {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(5, 9, 12, 0.42);
+  z-index: 95;
+}
+
+.version-history-panel {
+  width: min(860px, 100%);
+  max-height: min(76vh, 760px);
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(23, 23, 23, 0.18);
+  border-radius: 8px;
+  background: #f5f5f1;
+}
+
+.version-history-panel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.version-history-panel header strong {
+  font-size: 15px;
+  color: #20242a;
+}
+
+.version-history-panel > p {
+  margin: 0;
+  color: #65707a;
+  font-size: 12px;
+}
+
+.version-history-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+  overflow-y: auto;
+}
+
+.version-history-list button {
+  width: 100%;
+  border: 1px solid rgba(23, 23, 23, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.88);
+  color: #303741;
+  padding: 8px 10px;
+  display: grid;
+  gap: 4px;
+  text-align: left;
+}
+
+.version-history-list button:hover {
+  border-color: #e36a3c;
+}
+
+.version-history-list button.active {
+  border-color: #e33b24;
+  background: rgba(227, 59, 36, 0.08);
+}
+
+.version-history-list button strong {
+  font-size: 13px;
+  color: #2a3139;
+}
+
+.version-history-list button span {
+  font-size: 12px;
+  color: #5f6973;
+}
+
+.version-history-preview {
+  width: 100%;
+  min-height: 150px;
+  resize: vertical;
+  border: 1px solid rgba(23, 23, 23, 0.16);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #2a3139;
+  padding: 10px;
+  line-height: 1.5;
 }
 
 .editor-toolbar dl {
@@ -1077,6 +1298,38 @@ kbd {
   margin: 0;
 }
 
+.memory-module-tabs {
+  margin-top: 12px;
+  display: inline-flex;
+  border: 1px solid rgba(23, 23, 23, 0.14);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.memory-module-tabs button {
+  min-width: 88px;
+  border: 0;
+  border-right: 1px solid rgba(23, 23, 23, 0.12);
+  background: rgba(255, 255, 255, 0.72);
+  color: #555d66;
+  padding: 6px 10px;
+  font-size: 13px;
+}
+
+.memory-module-tabs button:last-child {
+  border-right: 0;
+}
+
+.memory-module-tabs button:hover {
+  background: rgba(227, 59, 36, 0.12);
+  color: #b23323;
+}
+
+.memory-module-tabs button.active {
+  background: rgba(227, 59, 36, 0.92);
+  color: #fff;
+}
+
 .memory-list {
   display: grid;
   gap: 12px;
@@ -1129,12 +1382,22 @@ kbd {
 
 .memory-jump {
   justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   border: 1px solid rgba(23, 23, 23, 0.16);
   border-radius: 5px;
   padding: 4px 8px;
   background: #ffffff;
   color: var(--ink);
   font-size: 12px;
+}
+
+.memory-jump em {
+  font-style: normal;
+  color: #6f7780;
+  border-left: 1px solid rgba(23, 23, 23, 0.12);
+  padding-left: 8px;
 }
 
 .memory-jump:hover {
@@ -1603,7 +1866,13 @@ kbd {
   }
 
   .menu-bar {
+    grid-template-columns: minmax(220px, auto) 1fr auto;
     padding-left: 14px;
+  }
+
+  .brand {
+    position: static;
+    transform: none;
   }
 
   .quick-rail {
