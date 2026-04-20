@@ -1,0 +1,109 @@
+type DesktopGeneratePayload = {
+  provider: 'ollama' | 'openai'
+  baseUrl: string
+  model: string
+  apiKey: string
+  temperature: number
+  sessionId: string
+  instruction: string
+  input: string
+  memory: string[]
+  skillsPrompt: string
+}
+
+type DesktopGenerateResult = {
+  sessionId: string
+  output: string
+}
+
+type DesktopCreateModelPayload = {
+  baseModel: string
+  modelName: string
+  skillsPrompt: string
+}
+
+type DesktopCreateModelResult = {
+  ok: boolean
+  stdout?: string
+  stderr?: string
+  modelName?: string
+}
+
+type DesktopOllamaModelsResult = {
+  models: string[]
+}
+
+type DesktopSkillItem = {
+  id: string
+  key: string
+  source: 'official' | 'custom'
+  name: string
+  fileName: string
+  installed: boolean
+  canRename: boolean
+  canDelete: boolean
+  updatedAt: string
+  content: string
+}
+
+type DesktopSkillsPayload = {
+  ok?: boolean
+  catalog: DesktopSkillItem[]
+  skillsPrompt: string
+  officialDir?: string
+}
+
+type DesktopProjectMeta = {
+  id: string
+  name: string
+  createdAt: string
+  updatedAt: string
+}
+
+type DesktopProjectSettings = {
+  language: 'zh-CN' | 'en-US'
+  projectsDir: string
+}
+
+interface NovelDesktopApi {
+  isDesktop: boolean
+  generate(payload: DesktopGeneratePayload): Promise<DesktopGenerateResult>
+  resetSession(payload: { sessionId: string }): Promise<{ ok: boolean }>
+  createSkillModel(payload: DesktopCreateModelPayload): Promise<DesktopCreateModelResult>
+  listOllamaModels(payload: { baseUrl: string }): Promise<DesktopOllamaModelsResult>
+  listSkills(): Promise<DesktopSkillsPayload>
+  installSkill(payload: { id: string; source: 'official' | 'custom' }): Promise<DesktopSkillsPayload>
+  uninstallSkill(payload: { id: string; source: 'official' | 'custom' }): Promise<DesktopSkillsPayload>
+  createCustomSkill(payload: { name: string; content: string }): Promise<DesktopSkillsPayload>
+  renameCustomSkill(payload: { id: string; name: string }): Promise<DesktopSkillsPayload>
+  deleteCustomSkill(payload: { id: string }): Promise<DesktopSkillsPayload>
+  getProjectSettings(): Promise<DesktopProjectSettings>
+  updateProjectSettings(payload: {
+    language?: 'zh-CN' | 'en-US'
+    projectsDir?: string
+  }): Promise<{ ok: boolean; settings: DesktopProjectSettings }>
+  pickProjectStorageDir(): Promise<{ canceled: boolean; path: string }>
+  syncProjectsIndex(payload: { projects: DesktopProjectMeta[] }): Promise<{ ok: boolean; path: string }>
+  syncProjectPackage(payload: {
+    projectId: string
+    projectName: string
+    workspace: unknown
+  }): Promise<{ ok: boolean; dirPath: string; filePath: string }>
+  openProjectPackage(payload: { projectId: string; projectName?: string }): Promise<{
+    ok: boolean
+    path: string
+    error?: string
+  }>
+  deleteProjectPackage(payload: { projectId: string; projectName?: string }): Promise<{
+    ok: boolean
+    path: string
+  }>
+}
+
+declare global {
+  interface Window {
+    novelDesktopApi?: NovelDesktopApi
+  }
+}
+
+export {}

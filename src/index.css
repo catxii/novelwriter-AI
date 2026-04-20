@@ -1,0 +1,26 @@
+html {
+  min-width: 320px;
+  background: #f7f7f2;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100svh;
+  overflow: hidden;
+  font-family:
+    Inter, 'Microsoft YaHei UI', 'PingFang SC', 'Hiragino Sans GB', Arial,
+    sans-serif;
+  color: #171717;
+  background: #f7f7f2;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  min-height: 100svh;
+  height: 100svh;
+  overflow: hidden;
+}
