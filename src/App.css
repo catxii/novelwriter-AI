@@ -42,6 +42,7 @@ button:disabled {
   overflow: hidden;
   display: grid;
   grid-template-columns: 132px minmax(0, 1fr);
+  padding-top: 52px;
   background:
     linear-gradient(90deg, rgba(23, 23, 23, 0.04) 1px, transparent 1px) 88px 0 /
       1px 100% no-repeat,
@@ -314,8 +315,8 @@ button:disabled {
 .quick-rail {
   position: sticky;
   top: 0;
-  height: 100svh;
-  padding: 36px 18px;
+  height: 100%;
+  padding: 14px 18px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -528,19 +529,25 @@ button:disabled {
 .app-frame {
   min-width: 0;
   min-height: 0;
-  height: 100svh;
+  height: 100%;
   display: flex;
   flex-direction: column;
   padding: 0;
 }
 
 .menu-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  width: 100%;
+  z-index: 60;
   min-height: 40px;
   display: grid;
   grid-template-columns: minmax(220px, auto) 1fr auto;
   align-items: center;
   gap: 18px;
-  padding: 6px 14px;
+  padding: 6px 14px 6px 146px;
   background: rgba(247, 247, 242, 0.86);
   border-bottom: 1px solid var(--rule);
   backdrop-filter: blur(16px);
@@ -1593,6 +1600,10 @@ kbd {
 @media (max-width: 1100px) {
   .writer-shell {
     grid-template-columns: 1fr;
+  }
+
+  .menu-bar {
+    padding-left: 14px;
   }
 
   .quick-rail {
