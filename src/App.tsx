@@ -696,10 +696,10 @@ function App() {
     () => localStorage.getItem(LAST_PROJECT_KEY) ?? ''
   )
   const [activeScreen, setActiveScreen] = useState<'projects' | 'writer'>('projects')
+  const [projectCenterView, setProjectCenterView] = useState<'home' | 'settings'>('home')
   const [newProjectName, setNewProjectName] = useState('')
   const [appLanguage, setAppLanguage] = useState<AppLanguage>('zh-CN')
   const [projectStorageDir, setProjectStorageDir] = useState('')
-  const [isProjectSettingsOpen, setIsProjectSettingsOpen] = useState(false)
   const [isApplyingProjectSettings, setIsApplyingProjectSettings] = useState(false)
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null)
   const [pendingDeleteProject, setPendingDeleteProject] = useState<ProjectMeta | null>(null)
@@ -1086,6 +1086,7 @@ function App() {
 
   function openProjectCenter() {
     setProjects(loadProjectIndex())
+    setProjectCenterView('home')
     setActiveScreen('projects')
   }
 
@@ -2385,16 +2386,100 @@ function App() {
   }
 
   if (activeScreen === 'projects') {
+    if (projectCenterView === 'settings') {
+      return (
+        <main className="project-shell">
+          <section className="project-home project-settings-page">
+            <header className="project-settings-page-header">
+              <button
+                className="text-button project-settings-back"
+                onClick={() => setProjectCenterView('home')}
+                type="button"
+              >
+                {t('← 返回项目', '← Back To Projects')}
+              </button>
+              <div>
+                <strong>{t('设置', 'Settings')}</strong>
+                <p>{t('管理语言与项目文件保存位置。', 'Manage language and project storage path.')}</p>
+              </div>
+            </header>
+
+            {hasDesktopProjectStorage ? (
+              <div className="project-settings-panel">
+                <label>
+                  <span>{t('软件语言', 'Language')}</span>
+                  <select
+                    value={appLanguage}
+                    onChange={(event) => setAppLanguage(event.target.value as AppLanguage)}
+                  >
+                    <option value="zh-CN">中文</option>
+                    <option value="en-US">English</option>
+                  </select>
+                </label>
+                <label>
+                  <span>{t('项目文件保存位置', 'Project Storage Directory')}</span>
+                  <div className="project-storage-row">
+                    <input
+                      value={projectStorageDir}
+                      onChange={(event) => setProjectStorageDir(event.target.value)}
+                      placeholder={t('输入本地目录路径', 'Enter local directory path')}
+                    />
+                    <button className="text-button" onClick={() => void pickProjectStorageDir()}>
+                      {t('选择目录', 'Browse')}
+                    </button>
+                  </div>
+                </label>
+                <p className="panel-note-tip project-settings-note">
+                  {t(
+                    '修改保存位置后，会将当前所有项目文件包迁移到新目录。',
+                    'After changing the location, all existing project packages will be moved to the new directory.'
+                  )}
+                </p>
+                <button
+                  className="primary-button"
+                  disabled={isApplyingProjectSettings}
+                  onClick={() => void applyProjectSettings()}
+                >
+                  {isApplyingProjectSettings
+                    ? t('保存中...', 'Saving...')
+                    : t('保存设置', 'Save Settings')}
+                </button>
+              </div>
+            ) : (
+              <p className="panel-note-tip project-settings-note">
+                {t(
+                  '当前环境不支持项目文件目录管理。',
+                  'Project file directory management is not available in this environment.'
+                )}
+              </p>
+            )}
+          </section>
+        </main>
+      )
+    }
+
     return (
       <main className="project-shell">
         <section className="project-home">
           <header className="project-home-header">
-            <div className="project-home-brand">
-              <span className="brand-mark">N</span>
-              <div>
-                <strong>NovelWriter</strong>
-                <span>{t('本地项目中心', 'Local Project Hub')}</span>
+            <div className="project-home-header-top">
+              <div className="project-home-brand">
+                <span className="brand-mark">N</span>
+                <div>
+                  <strong>NovelWriter</strong>
+                  <span>{t('本地项目中心', 'Local Project Hub')}</span>
+                </div>
               </div>
+              {hasDesktopProjectStorage && (
+                <button
+                  className="project-settings-entry"
+                  onClick={() => setProjectCenterView('settings')}
+                  title={t('打开设置', 'Open Settings')}
+                  type="button"
+                >
+                  <span aria-hidden>⚙</span>
+                </button>
+              )}
             </div>
             <p>
               {t(
@@ -2428,69 +2513,6 @@ function App() {
               </button>
             )}
           </div>
-
-          {hasDesktopProjectStorage ? (
-            <div className="project-settings">
-              <button
-                className="text-button project-settings-toggle"
-                onClick={() => setIsProjectSettingsOpen((previous) => !previous)}
-                type="button"
-              >
-                {isProjectSettingsOpen
-                  ? t('收起设置', 'Hide Settings')
-                  : t('设置', 'Settings')}
-              </button>
-              {isProjectSettingsOpen && (
-                <div className="project-settings-panel">
-                  <label>
-                    <span>{t('软件语言', 'Language')}</span>
-                    <select
-                      value={appLanguage}
-                      onChange={(event) => setAppLanguage(event.target.value as AppLanguage)}
-                    >
-                      <option value="zh-CN">中文</option>
-                      <option value="en-US">English</option>
-                    </select>
-                  </label>
-                  <label>
-                    <span>{t('项目文件保存位置', 'Project Storage Directory')}</span>
-                    <div className="project-storage-row">
-                      <input
-                        value={projectStorageDir}
-                        onChange={(event) => setProjectStorageDir(event.target.value)}
-                        placeholder={t('输入本地目录路径', 'Enter local directory path')}
-                      />
-                      <button className="text-button" onClick={() => void pickProjectStorageDir()}>
-                        {t('选择目录', 'Browse')}
-                      </button>
-                    </div>
-                  </label>
-                  <p className="panel-note-tip project-settings-note">
-                    {t(
-                      '修改保存位置后，会将当前所有项目文件包迁移到新目录。',
-                      'After changing the location, all existing project packages will be moved to the new directory.'
-                    )}
-                  </p>
-                  <button
-                    className="primary-button"
-                    disabled={isApplyingProjectSettings}
-                    onClick={() => void applyProjectSettings()}
-                  >
-                    {isApplyingProjectSettings
-                      ? t('保存中...', 'Saving...')
-                      : t('保存设置', 'Save Settings')}
-                  </button>
-                </div>
-              )}
-            </div>
-          ) : (
-            <p className="panel-note-tip project-settings-note">
-              {t(
-                '当前环境不支持项目文件目录管理。',
-                'Project file directory management is not available in this environment.'
-              )}
-            </p>
-          )}
 
           <ul className="project-list">
             {projects.map((project) => (

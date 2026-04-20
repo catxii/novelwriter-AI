@@ -75,6 +75,13 @@ button:disabled {
   gap: 8px;
 }
 
+.project-home-header-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .project-home-header p {
   margin: 0;
   color: #565b55;
@@ -115,6 +122,49 @@ button:disabled {
   color: var(--ink);
   padding: 8px 10px;
   outline: none;
+}
+
+.project-settings-entry {
+  width: 36px;
+  height: 36px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid rgba(23, 23, 23, 0.18);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.9);
+  color: #4f5750;
+  font-size: 18px;
+  line-height: 1;
+  padding: 0;
+}
+
+.project-settings-entry:hover {
+  border-color: var(--accent);
+  color: var(--accent-dark);
+}
+
+.project-settings-page {
+  max-width: 760px;
+}
+
+.project-settings-page-header {
+  display: grid;
+  gap: 8px;
+}
+
+.project-settings-page-header strong {
+  display: block;
+  font-size: 20px;
+}
+
+.project-settings-page-header p {
+  margin: 0;
+  color: #5b625c;
+  font-size: 14px;
+}
+
+.project-settings-back {
+  justify-self: start;
 }
 
 .project-settings {
