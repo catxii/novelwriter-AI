@@ -1,7 +1,17 @@
 ﻿import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
 import MonacoEditor, { loader, type OnMount } from '@monaco-editor/react'
+import type { MouseEvent as ReactMouseEvent } from 'react'
 import * as monacoApi from 'monaco-editor'
 import type * as Monaco from 'monaco-editor'
+import appLogo from '../icon/logo.png'
+import writingIcon from '../icon/写作.png'
+import createIcon from '../icon/新建.png'
+import totalCharsIcon from '../icon/今日字数.png'
+import streakIcon from '../icon/连续创作.png'
+import worksIcon from '../icon/创作作品.png'
+import todayCharsIcon from '../icon/新闻写作.png'
+import homeBanner from '../banner/banner1.png'
+import titleBanner from '../banner/title-banner.png'
 import './App.css'
 
 loader.config({ monaco: monacoApi })
@@ -10,6 +20,13 @@ type ProviderKind = 'ollama' | 'openai'
 type ActivePanel = 'memory' | 'settings' | 'result' | 'backup' | 'skills'
 type ConnectionState = 'unknown' | 'checking' | 'connected' | 'failed'
 type AppLanguage = 'zh-CN' | 'en-US'
+type AssistantChatRole = 'user' | 'assistant'
+type AssistantChatMessage = {
+  id: number
+  role: AssistantChatRole
+  content: string
+  createdAt: string
+}
 
 type ProviderConfig = {
   kind: ProviderKind
@@ -171,6 +188,7 @@ const LEGACY_KEYS = ['novelwriter.workspace.v2', 'novelwriter.workspace.v1']
 const PROJECT_INDEX_KEY = 'novelwriter.projects.v1'
 const PROJECT_DATA_PREFIX = 'novelwriter.project.v1.'
 const LAST_PROJECT_KEY = 'novelwriter.project.last.v1'
+const APP_DISPLAY_NAME = '超级兔子AI写作'
 
 const actions: WriterAction[] = [
   {
@@ -209,6 +227,33 @@ const actions: WriterAction[] = [
 
 const nowLabel = () => new Date().toLocaleString('zh-CN', { hour12: false })
 const lineCount = (text: string) => Math.max(1, text.split('\n').length)
+const DAY_MS = 24 * 60 * 60 * 1000
+
+function parseDayStartMs(label: string) {
+  const match = label.match(/(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/)
+  if (!match) return null
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return null
+  const date = new Date(year, month - 1, day)
+  if (Number.isNaN(date.getTime())) return null
+  date.setHours(0, 0, 0, 0)
+  return date.getTime()
+}
+
+function countConsecutiveDays(dayMsList: number[]) {
+  if (!dayMsList.length) return 0
+  const daySet = new Set(dayMsList)
+  const cursor = new Date()
+  cursor.setHours(0, 0, 0, 0)
+  let streak = 0
+  while (daySet.has(cursor.getTime())) {
+    streak += 1
+    cursor.setTime(cursor.getTime() - DAY_MS)
+  }
+  return streak
+}
 const createSessionId = () => `s-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 const EMPTY_VERSIONS: Version[] = []
 const VERSION_TAB_BASE_WIDTH = 132
@@ -302,6 +347,75 @@ function pickPreferredOllamaModel(currentModel: string, models: string[]) {
   const current = currentModel.trim()
   if (current && models.includes(current)) return current
   return models[0] ?? ''
+}
+
+function toCloudModelName(name: string) {
+  const value = name.trim()
+  if (!value) return ''
+  return /-cloud(?::|$)/i.test(value) ? value : `${value}-cloud`
+}
+
+function countSnapshotChars(snapshot: NormalizedWorkspace) {
+  return snapshot.chapters.reduce(
+    (chapterSum, chapter) =>
+      chapterSum +
+      chapter.versions.reduce((versionSum, version) => {
+        const compact = String(version.draft || '').replace(/\s/g, '')
+        return versionSum + compact.length
+      }, 0),
+    0
+  )
+}
+
+function parseAssistantModelOutput(raw: string) {
+  const text = raw.trim()
+  if (!text) {
+    return { reply: '已处理。', apply: false, updatedDraft: '' }
+  }
+
+  const parseFromString = (value: string) => {
+    try {
+      const parsed = JSON.parse(value) as {
+        reply?: unknown
+        apply?: unknown
+        updatedDraft?: unknown
+      }
+      return {
+        reply: typeof parsed.reply === 'string' && parsed.reply.trim() ? parsed.reply.trim() : '',
+        apply: Boolean(parsed.apply),
+        updatedDraft:
+          typeof parsed.updatedDraft === 'string' && parsed.updatedDraft.trim()
+            ? parsed.updatedDraft.trim()
+            : ''
+      }
+    } catch {
+      return null
+    }
+  }
+
+  const direct = parseFromString(text)
+  if (direct) {
+    return {
+      reply: direct.reply || (direct.apply ? '已按你的要求更新正文。' : '已收到。'),
+      apply: direct.apply && Boolean(direct.updatedDraft),
+      updatedDraft: direct.updatedDraft
+    }
+  }
+
+  const first = text.indexOf('{')
+  const last = text.lastIndexOf('}')
+  if (first >= 0 && last > first) {
+    const sliced = parseFromString(text.slice(first, last + 1))
+    if (sliced) {
+      return {
+        reply: sliced.reply || (sliced.apply ? '已按你的要求更新正文。' : '已收到。'),
+        apply: sliced.apply && Boolean(sliced.updatedDraft),
+        updatedDraft: sliced.updatedDraft
+      }
+    }
+  }
+
+  return { reply: text, apply: false, updatedDraft: '' }
 }
 
 function normalizeHistoryItems(items: unknown): VersionHistoryItem[] {
@@ -781,6 +895,9 @@ function App() {
   const versionMeasureRefs = useRef<Record<number, HTMLSpanElement | null>>({})
   const overflowMenuRef = useRef<HTMLDivElement | null>(null)
   const addPageMenuRef = useRef<HTMLDivElement | null>(null)
+  const editorPaneRef = useRef<HTMLElement | null>(null)
+  const assistantDialogRef = useRef<HTMLDivElement | null>(null)
+  const assistantMessagesViewportRef = useRef<HTMLDivElement | null>(null)
   const legacyWorkspace = useMemo(() => loadLegacyWorkspace(), [])
   const initialWorkspace = useMemo(
     () => legacyWorkspace ?? createDefaultWorkspace(),
@@ -792,7 +909,7 @@ function App() {
     () => localStorage.getItem(LAST_PROJECT_KEY) ?? ''
   )
   const [activeScreen, setActiveScreen] = useState<'projects' | 'writer'>('projects')
-  const [projectCenterView, setProjectCenterView] = useState<'home' | 'settings'>('home')
+  const [projectCenterView, setProjectCenterView] = useState<'home' | 'settings' | 'all'>('home')
   const [newProjectName, setNewProjectName] = useState('')
   const [appLanguage, setAppLanguage] = useState<AppLanguage>('zh-CN')
   const [projectStorageDir, setProjectStorageDir] = useState('')
@@ -804,6 +921,10 @@ function App() {
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null)
   const [pendingDeleteProject, setPendingDeleteProject] = useState<ProjectMeta | null>(null)
   const [deleteProjectConfirmName, setDeleteProjectConfirmName] = useState('')
+  const [deleteProjectConfirmError, setDeleteProjectConfirmError] = useState('')
+  const [isCreateProjectModalOpen, setIsCreateProjectModalOpen] = useState(false)
+  const [projectActionMenuId, setProjectActionMenuId] = useState<string | null>(null)
+  const [isWindowMaximized, setIsWindowMaximized] = useState(false)
 
   const [chapters, setChapters] = useState<Chapter[]>(
     withOrderedChapterTitles(initialWorkspace.chapters)
@@ -821,6 +942,9 @@ function App() {
   )
   const [skillModelName, setSkillModelName] = useState(initialWorkspace.skillModelName)
   const [ollamaModels, setOllamaModels] = useState<string[]>([])
+  const [localOllamaModels, setLocalOllamaModels] = useState<string[]>([])
+  const [cloudOllamaModels, setCloudOllamaModels] = useState<string[]>([])
+  const [loadCloudModels, setLoadCloudModels] = useState(false)
   const [isLoadingOllamaModels, setIsLoadingOllamaModels] = useState(false)
   const [result, setResult] = useState('')
   const [status, setStatus] = useState('就绪')
@@ -855,6 +979,13 @@ function App() {
   const [isAdvancedSettingsOpen, setIsAdvancedSettingsOpen] = useState(false)
   const [isVersionHistoryOpen, setIsVersionHistoryOpen] = useState(false)
   const [selectedHistoryId, setSelectedHistoryId] = useState<number | null>(null)
+  const [assistantOpen, setAssistantOpen] = useState(false)
+  const [assistantInput, setAssistantInput] = useState('')
+  const [assistantMessages, setAssistantMessages] = useState<AssistantChatMessage[]>([])
+  const [assistantRunning, setAssistantRunning] = useState(false)
+  const [assistantDialogPos, setAssistantDialogPos] = useState({ x: 24, y: 24 })
+  const [assistantDialogDragging, setAssistantDialogDragging] = useState(false)
+  const [assistantDialogDragOffset, setAssistantDialogDragOffset] = useState({ x: 0, y: 0 })
 
   const activeProject = useMemo(
     () => projects.find((project) => project.id === activeProjectId) ?? null,
@@ -898,6 +1029,10 @@ function App() {
     activeChapter && activeVersion ? `${activeChapter.id}:${activeVersion.id}` : ''
   const currentSessionId = currentSessionKey ? (sessionMap[currentSessionKey] ?? '') : ''
   const chapterVersions = activeChapter?.versions ?? EMPTY_VERSIONS
+  const deleteProjectExpectedName = pendingDeleteProject?.name.trim() ?? ''
+  const deleteProjectConfirmInput = deleteProjectConfirmName.trim()
+  const isDeleteProjectNameMatch =
+    Boolean(deleteProjectExpectedName) && deleteProjectConfirmInput === deleteProjectExpectedName
   const canDeleteVersion = chapterVersions.length > 1
   const visibleVersionSet = useMemo(() => new Set(visibleVersionIds), [visibleVersionIds])
   const overflowVersionSet = useMemo(() => new Set(overflowVersionIds), [overflowVersionIds])
@@ -960,7 +1095,7 @@ function App() {
     for (const chapter of chapters) {
       if (chapter.kind === 'chapter') {
         chapterSeq += 1
-        labelMap.set(chapter.id, String(chapterSeq))
+        labelMap.set(chapter.id, `第${chapterSeq}章`)
         continue
       }
       const type = chapter.specialType ?? 'special'
@@ -1085,11 +1220,13 @@ function App() {
   function requestDeleteProject(project: ProjectMeta) {
     setPendingDeleteProject(project)
     setDeleteProjectConfirmName('')
+    setDeleteProjectConfirmError('')
   }
 
   function cancelDeleteProject() {
     setPendingDeleteProject(null)
     setDeleteProjectConfirmName('')
+    setDeleteProjectConfirmError('')
   }
 
   async function confirmDeleteProject() {
@@ -1097,10 +1234,14 @@ function App() {
     if (!project) return
     const expectedName = project.name.trim()
     if (deleteProjectConfirmName.trim() !== expectedName) {
-      setStatus(t('输入不匹配，已取消删除', 'Name mismatch. Deletion canceled.'))
+      setDeleteProjectConfirmError(
+        t('项目名不匹配，请完整输入后再删除。', 'Project name mismatch. Please type the full name.')
+      )
+      setStatus(t('输入不匹配，请检查项目名', 'Name mismatch. Check the project name.'))
       return
     }
 
+    setDeleteProjectConfirmError('')
     setDeletingProjectId(project.id)
     try {
       localStorage.removeItem(projectStorageKey(project.id))
@@ -1184,10 +1325,22 @@ function App() {
     setStatus(project ? `已打开项目：${project.name}` : '已打开项目')
   }
 
-  function createProject() {
-    const nextName =
-      newProjectName.trim() ||
-      (appLanguage === 'en-US' ? `New Project ${projects.length + 1}` : `新项目 ${projects.length + 1}`)
+  function openCreateProjectModal() {
+    setNewProjectName('')
+    setIsCreateProjectModalOpen(true)
+  }
+
+  function closeCreateProjectModal() {
+    setIsCreateProjectModalOpen(false)
+    setNewProjectName('')
+  }
+
+  function createProject(inputName?: string) {
+    const nextName = String(inputName ?? newProjectName).trim()
+    if (!nextName) {
+      setStatus(t('请输入作品名称', 'Please enter a project name'))
+      return
+    }
     const now = nowLabel()
     const projectId = createProjectId()
     const nextMeta: ProjectMeta = {
@@ -1203,7 +1356,7 @@ function App() {
     saveProjectIndex(nextProjects)
     void syncProjectsIndexToDisk(nextProjects)
     void syncProjectPackageToDisk(projectId, nextName, nextWorkspace)
-    setNewProjectName('')
+    closeCreateProjectModal()
     openProject(projectId, nextWorkspace)
     setStatus(`已创建项目：${nextName}`)
   }
@@ -1212,6 +1365,36 @@ function App() {
     setProjects(loadProjectIndex())
     setProjectCenterView('home')
     setActiveScreen('projects')
+  }
+
+  async function closeDesktopWindow() {
+    if (!window.novelDesktopApi?.closeWindow) return
+    try {
+      await window.novelDesktopApi.closeWindow()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('关闭窗口失败', 'Failed to close window'))
+      setStatus(t('关闭窗口失败', 'Failed to close window'))
+    }
+  }
+
+  async function minimizeDesktopWindow() {
+    if (!window.novelDesktopApi?.minimizeWindow) return
+    try {
+      const response = await window.novelDesktopApi.minimizeWindow()
+      if (response?.ok) setIsWindowMaximized(Boolean(response.isMaximized))
+    } catch {
+      // ignore
+    }
+  }
+
+  async function toggleDesktopMaximizeWindow() {
+    if (!window.novelDesktopApi?.toggleMaximizeWindow) return
+    try {
+      const response = await window.novelDesktopApi.toggleMaximizeWindow()
+      if (response?.ok) setIsWindowMaximized(Boolean(response.isMaximized))
+    } catch {
+      // ignore
+    }
   }
 
   useEffect(() => {
@@ -1231,12 +1414,59 @@ function App() {
   }, [])
 
   useEffect(() => {
+    if (!window.novelDesktopApi?.getWindowMaximizedState) return
+    let cancelled = false
+    void window.novelDesktopApi
+      .getWindowMaximizedState()
+      .then((payload) => {
+        if (cancelled) return
+        setIsWindowMaximized(Boolean(payload?.isMaximized))
+      })
+      .catch(() => {})
+    const off =
+      window.novelDesktopApi?.onWindowMaximizedChange?.((next) => {
+        if (!cancelled) setIsWindowMaximized(Boolean(next))
+      }) ?? (() => {})
+    return () => {
+      cancelled = true
+      off()
+    }
+  }, [])
+
+  useEffect(() => {
     if (!projectSettingsNotice) return
     const timer = window.setTimeout(() => {
       setProjectSettingsNotice(null)
     }, 2600)
     return () => window.clearTimeout(timer)
   }, [projectSettingsNotice])
+
+  useEffect(() => {
+    setProjectActionMenuId(null)
+  }, [projectCenterView, activeScreen])
+
+  useEffect(() => {
+    if (!projectActionMenuId) return
+
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target
+      if (target instanceof HTMLElement && target.closest('.project-item-menu')) return
+      setProjectActionMenuId(null)
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setProjectActionMenuId(null)
+      }
+    }
+
+    window.addEventListener('mousedown', onPointerDown)
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => {
+      window.removeEventListener('mousedown', onPointerDown)
+      window.removeEventListener('keydown', onKeyDown, true)
+    }
+  }, [projectActionMenuId])
 
   useEffect(() => {
     if (projects.length > 0 || !legacyWorkspace) return
@@ -1486,9 +1716,69 @@ function App() {
     hasSelection || selectedSnippet.trim().length > 0
   const canDeleteChapter = chapters.length > 1
   const hasSkillsCenter = Boolean(window.novelDesktopApi?.listSkills)
+  const hasDesktopOllamaSignin = Boolean(window.novelDesktopApi?.signinOllama)
   const hasDesktopProjectStorage = Boolean(
     window.novelDesktopApi?.getProjectSettings && window.novelDesktopApi?.openProjectPackage
   )
+  const hasDesktopWindowClose = Boolean(window.novelDesktopApi?.closeWindow)
+  const hasDesktopWindowControls = Boolean(
+    window.novelDesktopApi?.minimizeWindow &&
+      window.novelDesktopApi?.toggleMaximizeWindow &&
+      window.novelDesktopApi?.closeWindow
+  )
+  const dashboardGreeting =
+    appLanguage === 'en-US'
+      ? new Date().getHours() < 6
+        ? 'Late night, creator'
+        : new Date().getHours() < 12
+          ? 'Good morning, creator'
+          : new Date().getHours() < 18
+            ? 'Good afternoon, creator'
+            : 'Good evening, creator'
+      : new Date().getHours() < 6
+        ? '夜深了，创作者'
+        : new Date().getHours() < 12
+          ? '早上好，创作者'
+          : new Date().getHours() < 18
+            ? '下午好，创作者'
+            : '晚上好，创作者'
+  const recentProjects = projects.slice(0, 5)
+  const dashboardMetrics = useMemo(() => {
+    let totalChars = 0
+    let totalProjects = 0
+    let todayChars = 0
+    const writingDays: number[] = []
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    const todayMs = today.getTime()
+
+    for (const project of projects) {
+      const snapshot = loadProjectWorkspace(project.id)
+      if (!snapshot) continue
+      totalProjects += 1
+      const projectChars = countSnapshotChars(snapshot)
+      totalChars += projectChars
+      const updatedDayMs = parseDayStartMs(project.updatedAt)
+      if (typeof updatedDayMs === 'number') {
+        writingDays.push(updatedDayMs)
+        if (updatedDayMs === todayMs) {
+          todayChars += projectChars
+        }
+      }
+    }
+
+    return {
+      totalChars,
+      totalProjects,
+      todayChars,
+      streakDays: countConsecutiveDays(writingDays)
+    }
+  }, [projects])
+  const totalCharsLabel =
+    dashboardMetrics.totalChars >= 10000
+      ? `${(dashboardMetrics.totalChars / 10000).toFixed(dashboardMetrics.totalChars >= 100000 ? 0 : 1)}万`
+      : dashboardMetrics.totalChars.toLocaleString('zh-CN')
+  const todayCharsLabel = dashboardMetrics.todayChars.toLocaleString('zh-CN')
   const editorContextMenuItems: EditorContextMenuItem[] = [
     {
       key: 'continue',
@@ -1714,30 +2004,77 @@ function App() {
     }
   }
 
-  async function refreshOllamaModels(options?: { silent?: boolean; syncModel?: boolean }) {
+  async function refreshOllamaModels(options?: {
+    silent?: boolean
+    syncModel?: boolean
+    includeCloud?: boolean
+  }) {
     const silent = Boolean(options?.silent)
     const syncModel = Boolean(options?.syncModel)
+    const includeCloud = options?.includeCloud ?? loadCloudModels
     if (config.kind !== 'ollama') return
     const baseUrl = normalizeBaseUrl(config.baseUrl, 'ollama')
     if (!baseUrl) return
     if (!silent) setIsLoadingOllamaModels(true)
     try {
       let models: string[] = []
+      let nextLocalModels: string[] = []
+      let nextCloudModels: string[] = []
       if (window.novelDesktopApi?.listOllamaModels) {
-        const payload = await window.novelDesktopApi.listOllamaModels({ baseUrl })
+        const payload = await window.novelDesktopApi.listOllamaModels({
+          baseUrl,
+          includeCloud
+        })
         models = Array.isArray(payload?.models)
           ? payload.models.filter(
               (item): item is string => typeof item === 'string' && Boolean(item.trim())
             )
           : []
+        nextLocalModels = Array.isArray(payload?.localModels)
+          ? payload.localModels.filter(
+              (item): item is string => typeof item === 'string' && Boolean(item.trim())
+            )
+          : []
+        nextCloudModels = Array.isArray(payload?.cloudModels)
+          ? payload.cloudModels.filter(
+              (item): item is string => typeof item === 'string' && Boolean(item.trim())
+            )
+          : []
+        if (!nextLocalModels.length && models.length > 0) {
+          nextLocalModels = models.filter((name) => !/-cloud(?::|$)/i.test(name))
+        }
+        if (includeCloud && !nextCloudModels.length && models.length > 0) {
+          nextCloudModels = models.filter((name) => /-cloud(?::|$)/i.test(name))
+        }
       } else {
         const response = await fetch(`${baseUrl}/api/tags`)
         if (!response.ok) throw new Error(`Ollama 请求失败：${response.status}`)
         const data = (await response.json()) as unknown
-        models = pickOllamaModelNames(data)
+        nextLocalModels = pickOllamaModelNames(data)
+        if (includeCloud) {
+          try {
+            const cloudResponse = await fetch('https://ollama.com/api/tags')
+            if (cloudResponse.ok) {
+              const cloudData = (await cloudResponse.json()) as unknown
+              const remoteModels = pickOllamaModelNames(cloudData)
+              nextCloudModels = remoteModels
+                .map((name) => toCloudModelName(name))
+                .filter(Boolean)
+            }
+          } catch {
+            // ignore cloud fetch failure and keep local models
+          }
+        }
+        models = [...nextLocalModels, ...nextCloudModels]
       }
 
       const nextModels = [...new Set(models)].sort((a, b) => a.localeCompare(b, 'zh-CN'))
+      setLocalOllamaModels(
+        [...new Set(nextLocalModels)].sort((a, b) => a.localeCompare(b, 'zh-CN'))
+      )
+      setCloudOllamaModels(
+        [...new Set(nextCloudModels)].sort((a, b) => a.localeCompare(b, 'zh-CN'))
+      )
       setOllamaModels(nextModels)
 
       if (syncModel) {
@@ -1757,35 +2094,87 @@ function App() {
     }
   }
 
+  async function toggleCloudModelLoading(nextValue: boolean) {
+    setLoadCloudModels(nextValue)
+    if (config.kind !== 'ollama') return
+
+    if (nextValue && hasDesktopOllamaSignin && window.novelDesktopApi?.signinOllama) {
+      try {
+        await window.novelDesktopApi.signinOllama()
+        setStatus('已触发 Ollama 登录流程')
+      } catch (err) {
+        setError(err instanceof Error ? err.message : '启动 Ollama 登录失败')
+        setStatus('启动 Ollama 登录失败')
+      }
+    }
+
+    await refreshOllamaModels({ syncModel: true, includeCloud: nextValue })
+  }
+
   useEffect(() => {
     if (config.kind !== 'ollama') return
     const baseUrl = normalizeBaseUrl(config.baseUrl, 'ollama')
     if (!baseUrl) return
-    void (async () => {
-      try {
-        if (window.novelDesktopApi?.listOllamaModels) {
-          const payload = await window.novelDesktopApi.listOllamaModels({ baseUrl })
-          const next = Array.isArray(payload?.models)
-            ? payload.models.filter(
-                (item): item is string => typeof item === 'string' && Boolean(item.trim())
-              )
-            : []
-          setOllamaModels([...new Set(next)].sort((a, b) => a.localeCompare(b, 'zh-CN')))
-          return
-        }
-        const response = await fetch(`${baseUrl}/api/tags`)
-        if (!response.ok) return
-        const data = (await response.json()) as unknown
-        setOllamaModels(pickOllamaModelNames(data))
-      } catch {
-        // silent sync on config change
-      }
-    })()
-  }, [config.kind, config.baseUrl])
+    void refreshOllamaModels({ silent: true, includeCloud: loadCloudModels })
+  }, [config.kind, config.baseUrl, loadCloudModels])
 
   useEffect(() => {
     setConnectionState('unknown')
   }, [config.kind, config.baseUrl, config.model, config.apiKey])
+
+  useEffect(() => {
+    if (!assistantDialogDragging) return
+
+    const onPointerMove = (event: MouseEvent) => {
+      const pane = editorPaneRef.current
+      if (!pane) return
+      const paneRect = pane.getBoundingClientRect()
+      const dialogWidth = assistantDialogRef.current?.offsetWidth ?? 430
+      const dialogHeight = assistantDialogRef.current?.offsetHeight ?? 420
+      const rawX = event.clientX - paneRect.left - assistantDialogDragOffset.x
+      const rawY = event.clientY - paneRect.top - assistantDialogDragOffset.y
+      const maxX = Math.max(8, pane.clientWidth - dialogWidth - 8)
+      const maxY = Math.max(8, pane.clientHeight - dialogHeight - 8)
+      setAssistantDialogPos({
+        x: Math.min(Math.max(rawX, 8), maxX),
+        y: Math.min(Math.max(rawY, 8), maxY)
+      })
+    }
+    const onPointerUp = () => {
+      setAssistantDialogDragging(false)
+    }
+
+    window.addEventListener('mousemove', onPointerMove)
+    window.addEventListener('mouseup', onPointerUp)
+    return () => {
+      window.removeEventListener('mousemove', onPointerMove)
+      window.removeEventListener('mouseup', onPointerUp)
+    }
+  }, [assistantDialogDragging, assistantDialogDragOffset.x, assistantDialogDragOffset.y])
+
+  useEffect(() => {
+    if (!assistantOpen) return
+    const viewport = assistantMessagesViewportRef.current
+    if (!viewport) return
+    viewport.scrollTop = viewport.scrollHeight
+  }, [assistantMessages, assistantRunning, assistantOpen])
+
+  useEffect(() => {
+    if (!assistantOpen) return
+    const clamp = () => {
+      const pane = editorPaneRef.current
+      const dialog = assistantDialogRef.current
+      if (!pane || !dialog) return
+      const maxX = Math.max(8, pane.clientWidth - dialog.offsetWidth - 8)
+      const maxY = Math.max(8, pane.clientHeight - dialog.offsetHeight - 8)
+      setAssistantDialogPos((previous) => ({
+        x: Math.min(Math.max(previous.x, 8), maxX),
+        y: Math.min(Math.max(previous.y, 8), maxY)
+      }))
+    }
+    window.addEventListener('resize', clamp)
+    return () => window.removeEventListener('resize', clamp)
+  }, [assistantOpen])
 
   function clearSelectionState() {
     setHasSelection(false)
@@ -2565,6 +2954,110 @@ function App() {
     setStatus('已保存到记忆')
   }
 
+  function openAssistantDialog() {
+    setAssistantOpen((previous) => {
+      const nextOpen = !previous
+      if (!nextOpen) return false
+      window.setTimeout(() => {
+        const pane = editorPaneRef.current
+        const dialog = assistantDialogRef.current
+        if (!pane || !dialog) return
+        const margin = 12
+        const x = Math.max(margin, pane.clientWidth - dialog.offsetWidth - margin)
+        const y = Math.max(margin, pane.clientHeight - dialog.offsetHeight - margin - 56)
+        setAssistantDialogPos({ x, y })
+      }, 0)
+      return true
+    })
+  }
+
+  function startAssistantDialogDrag(event: ReactMouseEvent<HTMLDivElement>) {
+    event.preventDefault()
+    event.stopPropagation()
+    const pane = editorPaneRef.current
+    if (!pane) return
+    const paneRect = pane.getBoundingClientRect()
+    setAssistantDialogDragOffset({
+      x: event.clientX - paneRect.left - assistantDialogPos.x,
+      y: event.clientY - paneRect.top - assistantDialogPos.y
+    })
+    setAssistantDialogDragging(true)
+  }
+
+  async function sendAssistantMessage() {
+    const message = assistantInput.trim()
+    if (!message) return
+    const nextUserMessage: AssistantChatMessage = {
+      id: Date.now(),
+      role: 'user',
+      content: message,
+      createdAt: nowLabel()
+    }
+    const conversation = [...assistantMessages, nextUserMessage]
+    setAssistantMessages(conversation)
+    setAssistantInput('')
+    setAssistantRunning(true)
+    setError('')
+    setStatus('小助手思考中')
+
+    try {
+      const conversationText = conversation
+        .slice(-14)
+        .map((item) => `${item.role === 'user' ? '用户' : '助手'}：${item.content}`)
+        .join('\n')
+      const output = await askModel(
+        `你是桌面写作软件中的“小助手”。你需要与用户多轮聊天，并在用户要求时直接修改当前版本正文。
+必须返回 JSON，格式固定为：
+{"reply":"回复用户的话","apply":true或false,"updatedDraft":"当apply=true时返回完整的新正文，否则返回空字符串"}
+
+规则：
+1) reply 用中文，简洁直接；
+2) 只有用户明确要求修改正文时，apply 才为 true；
+3) apply=true 时，updatedDraft 必须是完整正文，不要只给片段；
+4) 不要输出 JSON 以外的内容。`,
+        `当前正文：
+${currentDraft}
+
+最近对话：
+${conversationText}
+
+用户最新消息：
+${message}`
+      )
+      const parsed = parseAssistantModelOutput(output)
+      const assistantReply: AssistantChatMessage = {
+        id: Date.now() + 1,
+        role: 'assistant',
+        content: parsed.reply,
+        createdAt: nowLabel()
+      }
+      setAssistantMessages((previous) => [...previous, assistantReply])
+
+      if (parsed.apply && parsed.updatedDraft.trim()) {
+        updateActiveDraft(parsed.updatedDraft.trim())
+        setResult(parsed.updatedDraft.trim())
+        setActivePanel('result')
+        setStatus('小助手已更新当前版本')
+      } else {
+        setStatus('小助手已回复')
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '小助手请求失败')
+      setStatus('小助手请求失败')
+      setAssistantMessages((previous) => [
+        ...previous,
+        {
+          id: Date.now() + 2,
+          role: 'assistant',
+          content: '请求失败，请稍后重试。',
+          createdAt: nowLabel()
+        }
+      ])
+    } finally {
+      setAssistantRunning(false)
+    }
+  }
+
   const handleEditorMount: OnMount = (editor, monaco) => {
     defineEditorTheme(monaco)
     monaco.editor.setTheme(EDITOR_THEME_ID)
@@ -2693,28 +3186,225 @@ function App() {
       )
     }
 
+    if (projectCenterView === 'all') {
+      return (
+        <main className="project-shell">
+          <section className="project-home project-all-projects-page">
+            <header className="project-all-header">
+              <div>
+                <strong>{t('全部项目', 'All Projects')}</strong>
+                <p>{t(`共 ${projects.length} 个项目`, `${projects.length} projects`)}</p>
+              </div>
+              <button
+                className="text-button project-all-back"
+                onClick={() => setProjectCenterView('home')}
+                type="button"
+              >
+                {t('← 返回首页', '← Back To Home')}
+              </button>
+            </header>
+
+            <ul className="project-recent-list project-recent-list-all">
+              {projects.map((project, index) => (
+                <li key={project.id}>
+                  <div className={`project-cover project-cover-${(index % 6) + 1}`} aria-hidden="true" />
+                  <div className="project-recent-meta">
+                    <strong>{project.name}</strong>
+                    <small>
+                      {appLanguage === 'en-US'
+                        ? `Updated ${project.updatedAt}`
+                        : `更新于 ${project.updatedAt}`}
+                    </small>
+                  </div>
+                  <div className="project-item-actions">
+                    <button
+                      className="text-button"
+                      onClick={() => {
+                        setProjectActionMenuId(null)
+                        openProject(project.id)
+                      }}
+                    >
+                      {project.id === activeProjectId ? t('继续', 'Resume') : t('打开', 'Open')}
+                    </button>
+                    <div className="project-item-menu">
+                      <button
+                        aria-expanded={projectActionMenuId === project.id}
+                        className="text-button project-item-menu-trigger"
+                        onClick={() =>
+                          setProjectActionMenuId((current) =>
+                            current === project.id ? null : project.id
+                          )
+                        }
+                        title={t('更多操作', 'More actions')}
+                        type="button"
+                      >
+                        ⋯
+                      </button>
+                      {projectActionMenuId === project.id && (
+                        <div className="project-item-menu-dropdown" role="menu">
+                          <button
+                            className="text-button"
+                            disabled={!hasDesktopProjectStorage}
+                            onClick={() => {
+                              setProjectActionMenuId(null)
+                              void openProjectFiles(project)
+                            }}
+                            type="button"
+                          >
+                            {t('查看文件', 'View Files')}
+                          </button>
+                          <button
+                            className="text-button danger"
+                            disabled={deletingProjectId === project.id}
+                            onClick={() => {
+                              setProjectActionMenuId(null)
+                              requestDeleteProject(project)
+                            }}
+                            type="button"
+                          >
+                            {deletingProjectId === project.id
+                              ? t('删除中...', 'Deleting...')
+                              : t('删除', 'Delete')}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+
+            {!projects.length && (
+              <p className="empty-tip">{t('还没有项目，先创建一个新项目。', 'No projects yet. Create one to start.')}</p>
+            )}
+
+            {pendingDeleteProject && (
+              <div
+                className="project-delete-modal-backdrop"
+                onMouseDown={(event) => {
+                  if (event.target === event.currentTarget) cancelDeleteProject()
+                }}
+              >
+                <div className="project-delete-modal" onMouseDown={(event) => event.stopPropagation()}>
+                  <h3>{t('确认删除项目', 'Confirm Project Deletion')}</h3>
+                  <p>
+                    {t(
+                      `请输入项目名（文件名）"${pendingDeleteProject.name}" 以彻底删除。`,
+                      `Type project name "${pendingDeleteProject.name}" to permanently delete.`
+                    )}
+                  </p>
+                  <input
+                    autoFocus
+                    className={
+                      deleteProjectConfirmInput.length > 0
+                        ? isDeleteProjectNameMatch
+                          ? 'is-success'
+                          : 'is-error'
+                        : undefined
+                    }
+                    value={deleteProjectConfirmName}
+                    onChange={(event) => {
+                      const nextValue = event.target.value
+                      setDeleteProjectConfirmName(nextValue)
+                      const nextInput = nextValue.trim()
+                      if (!nextInput) {
+                        setDeleteProjectConfirmError('')
+                        return
+                      }
+                      if (nextInput === (pendingDeleteProject?.name.trim() ?? '')) {
+                        setDeleteProjectConfirmError('')
+                        return
+                      }
+                      setDeleteProjectConfirmError(
+                        t('项目名不匹配，请确认后重试。', 'Project name mismatch. Please check and retry.')
+                      )
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault()
+                        void confirmDeleteProject()
+                      }
+                      if (event.key === 'Escape') {
+                        event.preventDefault()
+                        cancelDeleteProject()
+                      }
+                    }}
+                    placeholder={t('输入完整项目名', 'Type full project name')}
+                  />
+                  {deleteProjectConfirmInput.length > 0 ? (
+                    isDeleteProjectNameMatch ? (
+                      <p className="project-delete-feedback is-success">
+                        {t('名称匹配，可执行删除。', 'Name matched. You can delete now.')}
+                      </p>
+                    ) : (
+                      <p className="project-delete-feedback is-error">
+                        {deleteProjectConfirmError ||
+                          t('项目名不匹配，请确认后重试。', 'Project name mismatch. Please check and retry.')}
+                      </p>
+                    )
+                  ) : (
+                    <p className="project-delete-feedback">
+                      {t('请输入完整项目名后才能删除。', 'Type the full project name to enable deletion.')}
+                    </p>
+                  )}
+                  <div className="project-delete-modal-actions">
+                    <button className="text-button" onClick={cancelDeleteProject}>
+                      {t('取消', 'Cancel')}
+                    </button>
+                    <button
+                      className="text-button danger"
+                      disabled={
+                        deletingProjectId === pendingDeleteProject.id || !isDeleteProjectNameMatch
+                      }
+                      onClick={() => void confirmDeleteProject()}
+                    >
+                      {deletingProjectId === pendingDeleteProject.id
+                        ? t('删除中...', 'Deleting...')
+                        : t('确认删除', 'Delete')}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </section>
+        </main>
+      )
+    }
+
     return (
       <main className="project-shell">
-        <section className="project-home">
+        <section className="project-home project-home-dashboard">
           <header className="project-home-header">
             <div className="project-home-header-top">
               <div className="project-home-brand">
-                <span className="brand-mark">N</span>
+                <img className="brand-logo" src={appLogo} alt={APP_DISPLAY_NAME} />
                 <div>
-                  <strong>NovelWriter</strong>
+                  <strong>{APP_DISPLAY_NAME}</strong>
                   <span>{t('本地项目中心', 'Local Project Hub')}</span>
                 </div>
               </div>
-              {hasDesktopProjectStorage && (
-                <button
-                  className="project-settings-entry"
-                  onClick={() => setProjectCenterView('settings')}
-                  title={t('打开设置', 'Open Settings')}
-                  type="button"
-                >
-                  <span aria-hidden>⚙</span>
-                </button>
-              )}
+              <div className="project-home-header-actions">
+                {hasDesktopProjectStorage && (
+                  <button
+                    className="project-settings-entry"
+                    onClick={() => setProjectCenterView('settings')}
+                    title={t('打开设置', 'Open Settings')}
+                    type="button"
+                  >
+                    <span aria-hidden>⚙</span>
+                  </button>
+                )}
+                {hasDesktopWindowClose && (
+                  <button
+                    className="project-close-entry"
+                    onClick={() => void closeDesktopWindow()}
+                    title={t('关闭', 'Close')}
+                    type="button"
+                  >
+                    <span aria-hidden>✕</span>
+                  </button>
+                )}
+              </div>
             </div>
             <p>
               {t(
@@ -2724,68 +3414,222 @@ function App() {
             </p>
           </header>
 
-          <div className="project-create-row">
-            <input
-              placeholder={t(
-                '输入项目名（可留空自动命名）',
-                'Project name (optional; auto-generated if empty)'
+          <div className="project-dashboard-grid">
+            <section className="project-dashboard-left">
+              <article className="project-greeting-panel">
+                <h2>
+                  {dashboardGreeting}
+                  <span aria-hidden> 👋</span>
+                </h2>
+                <p>{t('今天想快乐写作吗。', 'Ready to write something great today?')}</p>
+                <div className="project-mascot-scene">
+                  <img className="project-mascot-image" src={homeBanner} alt={t('首页横幅', 'Home banner')} />
+                </div>
+              </article>
+
+              <div className="project-quick-cards">
+                <article className="project-quick-card is-primary">
+                  <div className="project-quick-card-title">
+                    <img
+                      className="project-quick-card-icon"
+                      src={writingIcon}
+                      alt={t('继续写作', 'Resume Writing')}
+                    />
+                    <h3>{t('继续写作', 'Resume Writing')}</h3>
+                  </div>
+                  <p>
+                    {activeProject
+                      ? `${t('上次编辑：', 'Last edited: ')}${activeProject.name}`
+                      : t('暂无可继续项目。', 'No recent project to resume.')}
+                  </p>
+                  <button
+                    className="primary-button"
+                    disabled={!activeProject}
+                    onClick={() => activeProject && openProject(activeProject.id)}
+                  >
+                    {t('继续写作', 'Continue')}
+                  </button>
+                </article>
+                <article className="project-quick-card">
+                  <div className="project-quick-card-title">
+                    <img
+                      className="project-quick-card-icon"
+                      src={createIcon}
+                      alt={t('新建作品', 'Create Project')}
+                    />
+                    <h3>{t('新建作品', 'Create Project')}</h3>
+                  </div>
+                  <p>{t('快速创建一个全新故事。', 'Start a brand-new story quickly.')}</p>
+                  <button className="text-button" onClick={openCreateProjectModal}>
+                    {t('新建作品', 'Create')}
+                  </button>
+                </article>
+              </div>
+            </section>
+
+            <section className="project-recent-panel">
+              <header className="project-recent-header">
+                <strong>{t('最近项目', 'Recent Projects')}</strong>
+                <button
+                  className="project-all-link"
+                  onClick={() => setProjectCenterView('all')}
+                  type="button"
+                >
+                  {t('全部项目 >', 'All Projects >')}
+                </button>
+              </header>
+
+              <ul className="project-recent-list">
+                {recentProjects.map((project, index) => (
+                  <li key={project.id}>
+                    <div className={`project-cover project-cover-${(index % 6) + 1}`} aria-hidden="true" />
+                    <div className="project-recent-meta">
+                      <strong>{project.name}</strong>
+                      <small>
+                        {appLanguage === 'en-US'
+                          ? `Updated ${project.updatedAt}`
+                          : `更新于 ${project.updatedAt}`}
+                      </small>
+                    </div>
+                    <div className="project-item-actions">
+                      <button
+                        className="text-button"
+                        onClick={() => {
+                          setProjectActionMenuId(null)
+                          openProject(project.id)
+                        }}
+                      >
+                        {project.id === activeProjectId ? t('继续', 'Resume') : t('打开', 'Open')}
+                      </button>
+                      <div className="project-item-menu">
+                        <button
+                          aria-expanded={projectActionMenuId === project.id}
+                          className="text-button project-item-menu-trigger"
+                          onClick={() =>
+                            setProjectActionMenuId((current) =>
+                              current === project.id ? null : project.id
+                            )
+                          }
+                          title={t('更多操作', 'More actions')}
+                          type="button"
+                        >
+                          ⋯
+                        </button>
+                        {projectActionMenuId === project.id && (
+                          <div className="project-item-menu-dropdown" role="menu">
+                            <button
+                              className="text-button"
+                              disabled={!hasDesktopProjectStorage}
+                              onClick={() => {
+                                setProjectActionMenuId(null)
+                                void openProjectFiles(project)
+                              }}
+                              type="button"
+                            >
+                              {t('查看文件', 'View Files')}
+                            </button>
+                            <button
+                              className="text-button danger"
+                              disabled={deletingProjectId === project.id}
+                              onClick={() => {
+                                setProjectActionMenuId(null)
+                                requestDeleteProject(project)
+                              }}
+                              type="button"
+                            >
+                              {deletingProjectId === project.id
+                                ? t('删除中...', 'Deleting...')
+                                : t('删除', 'Delete')}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+              {!recentProjects.length && (
+                <p className="empty-tip">
+                  {t('还没有项目，先在左侧创建一个。', 'No projects yet. Create one from the left panel.')}
+                </p>
               )}
-              value={newProjectName}
-              onChange={(event) => setNewProjectName(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault()
-                  createProject()
-                }
-              }}
-            />
-            <button className="primary-button" onClick={createProject}>
-              {t('新建项目', 'Create Project')}
-            </button>
-            {activeProject && (
-              <button className="text-button" onClick={() => openProject(activeProject.id)}>
-                {t('继续上次项目', 'Resume Last Project')}
-              </button>
-            )}
+            </section>
           </div>
 
-          <ul className="project-list">
-            {projects.map((project) => (
-              <li key={project.id}>
-                <div>
-                  <strong>{project.name}</strong>
-                  <small>
-                    {appLanguage === 'en-US'
-                      ? `Updated ${project.updatedAt}`
-                      : `更新于 ${project.updatedAt}`}
-                  </small>
-                </div>
-                <div className="project-item-actions">
-                  <button className="text-button" onClick={() => openProject(project.id)}>
-                    {t('打开', 'Open')}
+          <section className="project-data-strip" aria-label={t('创作数据', 'Writing Stats')}>
+            <div className="project-stat-item">
+              <img className="project-stat-icon" src={totalCharsIcon} alt={t('累计字数', 'Total characters')} />
+              <div className="project-stat-text">
+                <strong>{totalCharsLabel}</strong>
+                <span>{t('累计字数', 'Total characters')}</span>
+              </div>
+            </div>
+            <div className="project-stat-item">
+              <img className="project-stat-icon" src={streakIcon} alt={t('连续创作', 'Writing streak')} />
+              <div className="project-stat-text">
+                <strong>{dashboardMetrics.streakDays}</strong>
+                <span>{t('连续创作', 'Writing streak')}</span>
+              </div>
+            </div>
+            <div className="project-stat-item">
+              <img className="project-stat-icon" src={worksIcon} alt={t('创作作品', 'Works')} />
+              <div className="project-stat-text">
+                <strong>{dashboardMetrics.totalProjects}</strong>
+                <span>{t('创作作品', 'Works')}</span>
+              </div>
+            </div>
+            <div className="project-stat-item">
+              <img className="project-stat-icon" src={todayCharsIcon} alt={t('今日字数', "Today's words")} />
+              <div className="project-stat-text">
+                <strong>{todayCharsLabel}</strong>
+                <span>{t('今日字数', "Today's words")}</span>
+              </div>
+            </div>
+            <div className="project-data-title-banner">
+              <img className="project-data-title-image" src={titleBanner} alt={t('标题横幅', 'Title banner')} />
+            </div>
+          </section>
+
+          {isCreateProjectModalOpen && (
+            <div
+              className="project-create-modal-backdrop"
+              onMouseDown={(event) => {
+                if (event.target === event.currentTarget) closeCreateProjectModal()
+              }}
+            >
+              <div className="project-create-modal" onMouseDown={(event) => event.stopPropagation()}>
+                <h3>{t('新建作品', 'Create Project')}</h3>
+                <p>{t('请输入作品名称。', 'Please enter a project name.')}</p>
+                <input
+                  autoFocus
+                  value={newProjectName}
+                  onChange={(event) => setNewProjectName(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault()
+                      createProject(newProjectName)
+                    }
+                    if (event.key === 'Escape') {
+                      event.preventDefault()
+                      closeCreateProjectModal()
+                    }
+                  }}
+                  placeholder={t('输入作品名称', 'Enter project name')}
+                />
+                <div className="project-create-modal-actions">
+                  <button className="text-button" onClick={closeCreateProjectModal}>
+                    {t('取消', 'Cancel')}
                   </button>
                   <button
-                    className="text-button"
-                    disabled={!hasDesktopProjectStorage}
-                    onClick={() => void openProjectFiles(project)}
+                    className="primary-button"
+                    disabled={!newProjectName.trim()}
+                    onClick={() => createProject(newProjectName)}
                   >
-                    {t('查看文件', 'View Files')}
-                  </button>
-                  <button
-                    className="text-button danger"
-                    disabled={deletingProjectId === project.id}
-                    onClick={() => requestDeleteProject(project)}
-                  >
-                    {deletingProjectId === project.id
-                      ? t('删除中...', 'Deleting...')
-                      : t('删除', 'Delete')}
+                    {t('创建', 'Create')}
                   </button>
                 </div>
-              </li>
-            ))}
-          </ul>
-          {!projects.length && (
-            <p className="empty-tip">{t('还没有项目，先创建一个新项目。', 'No projects yet. Create one to start.')}</p>
+              </div>
+            </div>
           )}
 
           {pendingDeleteProject && (
@@ -2805,8 +3649,30 @@ function App() {
                 </p>
                 <input
                   autoFocus
+                  className={
+                    deleteProjectConfirmInput.length > 0
+                      ? isDeleteProjectNameMatch
+                        ? 'is-success'
+                        : 'is-error'
+                      : undefined
+                  }
                   value={deleteProjectConfirmName}
-                  onChange={(event) => setDeleteProjectConfirmName(event.target.value)}
+                  onChange={(event) => {
+                    const nextValue = event.target.value
+                    setDeleteProjectConfirmName(nextValue)
+                    const nextInput = nextValue.trim()
+                    if (!nextInput) {
+                      setDeleteProjectConfirmError('')
+                      return
+                    }
+                    if (nextInput === (pendingDeleteProject?.name.trim() ?? '')) {
+                      setDeleteProjectConfirmError('')
+                      return
+                    }
+                    setDeleteProjectConfirmError(
+                      t('项目名不匹配，请确认后重试。', 'Project name mismatch. Please check and retry.')
+                    )
+                  }}
                   onKeyDown={(event) => {
                     if (event.key === 'Enter') {
                       event.preventDefault()
@@ -2819,13 +3685,31 @@ function App() {
                   }}
                   placeholder={t('输入完整项目名', 'Type full project name')}
                 />
+                {deleteProjectConfirmInput.length > 0 ? (
+                  isDeleteProjectNameMatch ? (
+                    <p className="project-delete-feedback is-success">
+                      {t('名称匹配，可执行删除。', 'Name matched. You can delete now.')}
+                    </p>
+                  ) : (
+                    <p className="project-delete-feedback is-error">
+                      {deleteProjectConfirmError ||
+                        t('项目名不匹配，请确认后重试。', 'Project name mismatch. Please check and retry.')}
+                    </p>
+                  )
+                ) : (
+                  <p className="project-delete-feedback">
+                    {t('请输入完整项目名后才能删除。', 'Type the full project name to enable deletion.')}
+                  </p>
+                )}
                 <div className="project-delete-modal-actions">
                   <button className="text-button" onClick={cancelDeleteProject}>
                     {t('取消', 'Cancel')}
                   </button>
                   <button
                     className="text-button danger"
-                    disabled={deletingProjectId === pendingDeleteProject.id}
+                    disabled={
+                      deletingProjectId === pendingDeleteProject.id || !isDeleteProjectNameMatch
+                    }
                     onClick={() => void confirmDeleteProject()}
                   >
                     {deletingProjectId === pendingDeleteProject.id
@@ -2939,21 +3823,43 @@ function App() {
       <section className="app-frame">
         <header className="menu-bar">
           <div className="brand">
-            <span className="brand-mark">N</span>
+            <img className="brand-logo" src={appLogo} alt={APP_DISPLAY_NAME} />
             <div>
-              <strong>NovelWriter</strong>
+              <strong>{APP_DISPLAY_NAME}</strong>
               <span>{t('AI 写作辅助台', 'AI Writing Desk')}</span>
             </div>
           </div>
-          <nav aria-label="菜单">
-            <button>{t('文件', 'File')}</button>
-            <button>{t('编辑', 'Edit')}</button>
-            <button>{t('选择', 'Select')}</button>
-            <button>{t('查找', 'Find')}</button>
-            <button>{t('工具', 'Tools')}</button>
-            <button onClick={openProjectCenter}>{t('项目', 'Projects')}</button>
-          </nav>
-          <div className="window-status">{status}</div>
+          <div className="menu-bar-right">
+            <div className="window-status">{status}</div>
+            {hasDesktopWindowControls && (
+              <div className="window-controls">
+                <button
+                  className="window-control-button"
+                  onClick={() => void minimizeDesktopWindow()}
+                  title={t('最小化', 'Minimize')}
+                  type="button"
+                >
+                  <span aria-hidden>─</span>
+                </button>
+                <button
+                  className="window-control-button"
+                  onClick={() => void toggleDesktopMaximizeWindow()}
+                  title={isWindowMaximized ? t('向下还原', 'Restore') : t('最大化', 'Maximize')}
+                  type="button"
+                >
+                  <span aria-hidden>{isWindowMaximized ? '❐' : '□'}</span>
+                </button>
+                <button
+                  className="window-control-button is-close"
+                  onClick={() => void closeDesktopWindow()}
+                  title={t('关闭', 'Close')}
+                  type="button"
+                >
+                  <span aria-hidden>✕</span>
+                </button>
+              </div>
+            )}
+          </div>
         </header>
 
         <div className="tab-row">
@@ -3059,7 +3965,7 @@ function App() {
         </div>
 
         <div className="workspace">
-          <section className="editor-pane" aria-label="正文编辑器">
+          <section className="editor-pane" aria-label="正文编辑器" ref={editorPaneRef}>
             <div className="editor-toolbar">
               <div className="editor-toolbar-main">
                 <span>正文</span>
@@ -3233,6 +4139,77 @@ function App() {
                 ))
               )}
             </footer>
+
+            <button
+              className="assistant-entry-button"
+              onClick={openAssistantDialog}
+              title="写作小助手"
+              type="button"
+            >
+              ✨
+            </button>
+
+            {assistantOpen && (
+              <div
+                className="assistant-chat-panel"
+                ref={assistantDialogRef}
+                style={{ left: assistantDialogPos.x, top: assistantDialogPos.y }}
+              >
+                <header className="assistant-chat-header" onMouseDown={startAssistantDialogDrag}>
+                  <strong>写作小助手</strong>
+                  <button
+                    className="text-button"
+                    onClick={() => setAssistantOpen(false)}
+                    type="button"
+                  >
+                    关闭
+                  </button>
+                </header>
+                <div className="assistant-chat-messages" ref={assistantMessagesViewportRef}>
+                  {assistantMessages.length === 0 ? (
+                    <p className="assistant-chat-empty">
+                      直接告诉我你想怎么改当前版本，我会先和你沟通，再按要求更新正文。
+                    </p>
+                  ) : (
+                    assistantMessages.map((item) => (
+                      <div
+                        className={`assistant-chat-bubble ${item.role === 'user' ? 'is-user' : 'is-assistant'}`}
+                        key={item.id}
+                      >
+                        <p>{item.content}</p>
+                        <small>{item.createdAt}</small>
+                      </div>
+                    ))
+                  )}
+                  {assistantRunning && (
+                    <div className="assistant-chat-bubble is-assistant">
+                      <p>正在思考...</p>
+                    </div>
+                  )}
+                </div>
+                <div className="assistant-chat-input-row">
+                  <textarea
+                    placeholder="例如：把闫君止的语气改得更冷一点，但不要改剧情走向。"
+                    value={assistantInput}
+                    onChange={(event) => setAssistantInput(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' && !event.shiftKey) {
+                        event.preventDefault()
+                        void sendAssistantMessage()
+                      }
+                    }}
+                  />
+                  <button
+                    className="primary-button"
+                    disabled={assistantRunning || !assistantInput.trim()}
+                    onClick={() => void sendAssistantMessage()}
+                    type="button"
+                  >
+                    发送
+                  </button>
+                </div>
+              </div>
+            )}
           </section>
 
           <aside className="side-pane" aria-label="辅助面板">
@@ -3544,7 +4521,12 @@ function App() {
                       <button
                         className="text-button"
                         disabled={isLoadingOllamaModels}
-                        onClick={() => void refreshOllamaModels({ syncModel: true })}
+                        onClick={() =>
+                          void refreshOllamaModels({
+                            syncModel: true,
+                            includeCloud: loadCloudModels
+                          })
+                        }
                         type="button"
                       >
                         {isLoadingOllamaModels ? '刷新中...' : '刷新模型'}
@@ -3552,10 +4534,20 @@ function App() {
                     )}
                   </div>
                   {config.kind === 'ollama' && (
+                    <div className="settings-checkbox-row">
+                      <input
+                        checked={loadCloudModels}
+                        onChange={(event) => void toggleCloudModelLoading(event.target.checked)}
+                        type="checkbox"
+                      />
+                      <span>加载云端模型（如需登录会自动触发 Ollama 登录）</span>
+                    </div>
+                  )}
+                  {config.kind === 'ollama' && (
                     <small className="settings-inline-tip">
                       {ollamaModels.length
-                        ? `可选 ${ollamaModels.length} 个本地模型`
-                        : '未读取到本地模型（可手动输入）'}
+                        ? `可选 ${ollamaModels.length} 个模型（本地 ${localOllamaModels.length}${loadCloudModels ? `，云端 ${cloudOllamaModels.length}` : ''}）`
+                        : '未读取到模型（可手动输入）'}
                     </small>
                   )}
                 </label>

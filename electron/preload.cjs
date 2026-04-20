@@ -14,6 +14,9 @@ contextBridge.exposeInMainWorld('novelDesktopApi', {
   listOllamaModels(payload) {
     return ipcRenderer.invoke('novel:ollama-models', payload)
   },
+  signinOllama() {
+    return ipcRenderer.invoke('novel:ollama-signin')
+  },
   listSkills() {
     return ipcRenderer.invoke('novel:skills-list')
   },
@@ -52,6 +55,28 @@ contextBridge.exposeInMainWorld('novelDesktopApi', {
   },
   deleteProjectPackage(payload) {
     return ipcRenderer.invoke('novel:project-delete-package', payload)
+  },
+  closeWindow() {
+    return ipcRenderer.invoke('novel:window-close')
+  },
+  minimizeWindow() {
+    return ipcRenderer.invoke('novel:window-minimize')
+  },
+  toggleMaximizeWindow() {
+    return ipcRenderer.invoke('novel:window-toggle-maximize')
+  },
+  getWindowMaximizedState() {
+    return ipcRenderer.invoke('novel:window-is-maximized')
+  },
+  onWindowMaximizedChange(callback) {
+    if (typeof callback !== 'function') return () => {}
+    const listener = (_event, payload) => {
+      callback(Boolean(payload?.isMaximized))
+    }
+    ipcRenderer.on('novel:window-maximized-changed', listener)
+    return () => {
+      ipcRenderer.removeListener('novel:window-maximized-changed', listener)
+    }
   },
 })
 

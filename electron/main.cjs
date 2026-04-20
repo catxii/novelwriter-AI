@@ -10,6 +10,8 @@ const MARKDOWN_EXTENSIONS = new Set(['.md', '.markdown'])
 const OFFICIAL_SKILLS_DIR = 'E:\\novelwriter\\skills'
 const DEFAULT_LANGUAGE = 'zh-CN'
 const PROJECTS_DIR_BASENAME = 'NovelWriter Projects'
+const APP_DISPLAY_NAME = '超级兔子AI写作'
+const APP_ICON_PATH = path.join(__dirname, '..', 'icon', 'logo.png')
 
 let mainWindow = null
 let cachePath = ''
@@ -559,22 +561,37 @@ async function callModel(payload, session) {
   const messages = session.messages
 
   if (provider === 'ollama') {
-    const response = await fetch(`${baseUrl}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: payload.model,
-        messages,
-        stream: false,
-        options: { temperature: payload.temperature },
-      }),
-    })
-    if (!response.ok) {
-      throw new Error(`Ollama request failed: ${response.status}`)
+    const primary = await requestOllamaChat(
+      baseUrl,
+      payload.model,
+      messages,
+      payload.temperature
+    )
+    if (primary.response.ok) {
+      if (primary.data?.error) throw new Error(primary.data.error)
+      return String(primary.data?.message?.content || '').trim()
     }
-    const data = await response.json()
-    if (data.error) throw new Error(data.error)
-    return String(data?.message?.content || '').trim()
+
+    const primaryError = String(primary.data?.error || primary.rawText || '').trim()
+    const canRetryCloud = !/-cloud(?::|$)/i.test(payload.model)
+    const modelNotFound = /model\s+'.+?'\s+not\s+found/i.test(primaryError)
+    if (canRetryCloud && modelNotFound) {
+      const cloudModel = toCloudModelName(payload.model)
+      const cloud = await requestOllamaChat(
+        baseUrl,
+        cloudModel,
+        messages,
+        payload.temperature
+      )
+      if (cloud.response.ok) {
+        if (cloud.data?.error) throw new Error(cloud.data.error)
+        return String(cloud.data?.message?.content || '').trim()
+      }
+      const cloudError = String(cloud.data?.error || cloud.rawText || '').trim()
+      throw new Error(cloudError || `Ollama request failed: ${cloud.response.status}`)
+    }
+
+    throw new Error(primaryError || `Ollama request failed: ${primary.response.status}`)
   }
 
   const response = await fetch(buildOpenAiUrl(baseUrl), {
@@ -686,25 +703,92 @@ async function createSkillModel(_event, payload) {
   }
 }
 
-async function listOllamaModels(_event, payload) {
-  const baseUrl = normalizeBaseUrl(payload?.baseUrl, 'ollama')
-  const response = await fetch(`${baseUrl}/api/tags`)
-  if (!response.ok) {
-    throw new Error(`Ollama request failed: ${response.status}`)
-  }
-
-  const data = await response.json().catch(() => ({}))
+function parseOllamaModelNames(data) {
   const rawModels = Array.isArray(data?.models) ? data.models : []
-  const names = rawModels
+  return rawModels
     .map((item) => {
       if (typeof item?.name === 'string' && item.name.trim()) return item.name.trim()
       if (typeof item?.model === 'string' && item.model.trim()) return item.model.trim()
       return ''
     })
     .filter(Boolean)
+}
 
-  const models = [...new Set(names)].sort((a, b) => a.localeCompare(b, 'zh-CN'))
-  return { models }
+function toCloudModelName(name) {
+  const value = String(name || '').trim()
+  if (!value) return ''
+  return /-cloud(?::|$)/i.test(value) ? value : `${value}-cloud`
+}
+
+async function requestOllamaChat(baseUrl, model, messages, temperature) {
+  const response = await fetch(`${baseUrl}/api/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model,
+      messages,
+      stream: false,
+      options: { temperature },
+    }),
+  })
+  const rawText = await response.text()
+  let data = null
+  try {
+    data = JSON.parse(rawText)
+  } catch {
+    data = null
+  }
+  return { response, data, rawText }
+}
+
+async function listOllamaModels(_event, payload) {
+  const baseUrl = normalizeBaseUrl(payload?.baseUrl, 'ollama')
+  const includeCloud = Boolean(payload?.includeCloud)
+  const response = await fetch(`${baseUrl}/api/tags`)
+  if (!response.ok) {
+    throw new Error(`Ollama request failed: ${response.status}`)
+  }
+
+  const data = await response.json().catch(() => ({}))
+  const localModels = [...new Set(parseOllamaModelNames(data))].sort((a, b) =>
+    a.localeCompare(b, 'zh-CN')
+  )
+  let cloudModels = []
+  if (includeCloud) {
+    try {
+      const cloudResponse = await fetch('https://ollama.com/api/tags')
+      if (cloudResponse.ok) {
+        const cloudData = await cloudResponse.json().catch(() => ({}))
+        const remoteModels = parseOllamaModelNames(cloudData)
+        cloudModels = remoteModels.map((name) => toCloudModelName(name)).filter(Boolean)
+      }
+    } catch {
+      // ignore cloud fetch errors and keep local models available
+    }
+  }
+
+  const sortedCloud = [...new Set(cloudModels)].sort((a, b) => a.localeCompare(b, 'zh-CN'))
+  const models = [...new Set([...localModels, ...sortedCloud])].sort((a, b) =>
+    a.localeCompare(b, 'zh-CN')
+  )
+  return { models, localModels, cloudModels: sortedCloud }
+}
+
+async function signinOllama() {
+  try {
+    const child = spawn('ollama', ['signin'], {
+      shell: true,
+      detached: true,
+      stdio: 'ignore',
+    })
+    child.unref()
+    shell.openExternal('https://ollama.com/signin').catch(() => {})
+    return { ok: true }
+  } catch (error) {
+    throw new Error(
+      error instanceof Error ? `启动 ollama signin 失败：${error.message}` : '启动 ollama signin 失败'
+    )
+  }
 }
 
 async function getProjectSettings() {
@@ -820,6 +904,7 @@ function registerIpc() {
   })
   ipcMain.handle('novel:create-skill-model', createSkillModel)
   ipcMain.handle('novel:ollama-models', listOllamaModels)
+  ipcMain.handle('novel:ollama-signin', signinOllama)
   ipcMain.handle('novel:skills-list', async () => getSkillsCenterPayload())
   ipcMain.handle('novel:skills-install', async (_event, payload) =>
     setSkillInstalled(payload, true)
@@ -837,10 +922,43 @@ function registerIpc() {
   ipcMain.handle('novel:project-sync-package', syncProjectPackage)
   ipcMain.handle('novel:project-open-package', openProjectPackage)
   ipcMain.handle('novel:project-delete-package', deleteProjectPackage)
+  ipcMain.handle('novel:window-close', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.close()
+    }
+    return { ok: true }
+  })
+  ipcMain.handle('novel:window-minimize', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.minimize()
+      return { ok: true, isMaximized: mainWindow.isMaximized() }
+    }
+    return { ok: false, isMaximized: false }
+  })
+  ipcMain.handle('novel:window-toggle-maximize', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMaximized()) {
+        mainWindow.unmaximize()
+      } else {
+        mainWindow.maximize()
+      }
+      return { ok: true, isMaximized: mainWindow.isMaximized() }
+    }
+    return { ok: false, isMaximized: false }
+  })
+  ipcMain.handle('novel:window-is-maximized', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      return { ok: true, isMaximized: mainWindow.isMaximized() }
+    }
+    return { ok: false, isMaximized: false }
+  })
 }
 
 function createWindow() {
   mainWindow = new BrowserWindow({
+    title: APP_DISPLAY_NAME,
+    icon: APP_ICON_PATH,
+    frame: false,
     width: 1460,
     height: 920,
     minWidth: 1200,
@@ -857,6 +975,16 @@ function createWindow() {
   mainWindow.webContents.on('context-menu', (event) => {
     event.preventDefault()
   })
+  mainWindow.on('maximize', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('novel:window-maximized-changed', { isMaximized: true })
+    }
+  })
+  mainWindow.on('unmaximize', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('novel:window-maximized-changed', { isMaximized: false })
+    }
+  })
 
   const devServerUrl = process.env.VITE_DEV_SERVER_URL
   if (devServerUrl) {
@@ -867,6 +995,7 @@ function createWindow() {
 }
 
 app.whenReady().then(async () => {
+  app.setName(APP_DISPLAY_NAME)
   cachePath = path.join(app.getPath('userData'), 'session-cache.json')
   skillsStorePath = path.join(app.getPath('userData'), 'skills-center.json')
   appSettingsPath = path.join(app.getPath('userData'), 'app-settings.json')

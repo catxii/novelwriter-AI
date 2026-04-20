@@ -31,6 +31,8 @@ type DesktopCreateModelResult = {
 
 type DesktopOllamaModelsResult = {
   models: string[]
+  localModels?: string[]
+  cloudModels?: string[]
 }
 
 type DesktopSkillItem = {
@@ -70,7 +72,11 @@ interface NovelDesktopApi {
   generate(payload: DesktopGeneratePayload): Promise<DesktopGenerateResult>
   resetSession(payload: { sessionId: string }): Promise<{ ok: boolean }>
   createSkillModel(payload: DesktopCreateModelPayload): Promise<DesktopCreateModelResult>
-  listOllamaModels(payload: { baseUrl: string }): Promise<DesktopOllamaModelsResult>
+  listOllamaModels(payload: {
+    baseUrl: string
+    includeCloud?: boolean
+  }): Promise<DesktopOllamaModelsResult>
+  signinOllama(): Promise<{ ok: boolean }>
   listSkills(): Promise<DesktopSkillsPayload>
   installSkill(payload: { id: string; source: 'official' | 'custom' }): Promise<DesktopSkillsPayload>
   uninstallSkill(payload: { id: string; source: 'official' | 'custom' }): Promise<DesktopSkillsPayload>
@@ -98,6 +104,11 @@ interface NovelDesktopApi {
     ok: boolean
     path: string
   }>
+  closeWindow(): Promise<{ ok: boolean }>
+  minimizeWindow(): Promise<{ ok: boolean; isMaximized: boolean }>
+  toggleMaximizeWindow(): Promise<{ ok: boolean; isMaximized: boolean }>
+  getWindowMaximizedState(): Promise<{ ok: boolean; isMaximized: boolean }>
+  onWindowMaximizedChange(callback: (isMaximized: boolean) => void): () => void
 }
 
 declare global {
