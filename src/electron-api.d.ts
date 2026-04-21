@@ -65,6 +65,17 @@ type DesktopProjectMeta = {
 type DesktopProjectSettings = {
   language: 'zh-CN' | 'en-US'
   projectsDir: string
+  autoUpdate: boolean
+  autoLaunch: boolean
+  appVersion: string
+}
+
+type DesktopImportedProject = {
+  id: string
+  name: string
+  createdAt: string
+  updatedAt: string
+  workspace: unknown
 }
 
 interface NovelDesktopApi {
@@ -87,7 +98,16 @@ interface NovelDesktopApi {
   updateProjectSettings(payload: {
     language?: 'zh-CN' | 'en-US'
     projectsDir?: string
+    autoUpdate?: boolean
+    autoLaunch?: boolean
   }): Promise<{ ok: boolean; settings: DesktopProjectSettings }>
+  checkAppUpgrade(): Promise<{
+    ok: boolean
+    currentVersion: string
+    latestVersion: string
+    hasUpdate: boolean
+    note: string
+  }>
   pickProjectStorageDir(): Promise<{ canceled: boolean; path: string }>
   syncProjectsIndex(payload: { projects: DesktopProjectMeta[] }): Promise<{ ok: boolean; path: string }>
   syncProjectPackage(payload: {
@@ -103,6 +123,12 @@ interface NovelDesktopApi {
   deleteProjectPackage(payload: { projectId: string; projectName?: string }): Promise<{
     ok: boolean
     path: string
+  }>
+  importProjectPackages(): Promise<{
+    canceled: boolean
+    imported: DesktopImportedProject[]
+    importedCount: number
+    skippedCount: number
   }>
   closeWindow(): Promise<{ ok: boolean }>
   minimizeWindow(): Promise<{ ok: boolean; isMaximized: boolean }>

@@ -10,7 +10,8 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "electron": "electron .",
-    "electron:dev": "concurrently -k \"vite\" \"wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .\""
+    "electron:dev": "concurrently -k \"vite\" \"wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .\"",
+    "dist:win": "npm run build && electron-builder --win nsis"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
@@ -34,6 +35,36 @@
     "concurrently": "^9.2.1",
     "cross-env": "^10.1.0",
     "electron": "^38.3.0",
+    "electron-builder": "^26.0.12",
     "wait-on": "^9.0.3"
+  },
+  "build": {
+    "appId": "com.novelwriter.desktop",
+    "productName": "超级兔子AI写作",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
   }
 }

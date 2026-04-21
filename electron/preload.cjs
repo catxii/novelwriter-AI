@@ -41,6 +41,9 @@ contextBridge.exposeInMainWorld('novelDesktopApi', {
   updateProjectSettings(payload) {
     return ipcRenderer.invoke('novel:project-settings-update', payload)
   },
+  checkAppUpgrade() {
+    return ipcRenderer.invoke('novel:app-check-upgrade')
+  },
   pickProjectStorageDir() {
     return ipcRenderer.invoke('novel:project-storage-pick-dir')
   },
@@ -55,6 +58,9 @@ contextBridge.exposeInMainWorld('novelDesktopApi', {
   },
   deleteProjectPackage(payload) {
     return ipcRenderer.invoke('novel:project-delete-package', payload)
+  },
+  importProjectPackages() {
+    return ipcRenderer.invoke('novel:project-import-packages')
   },
   closeWindow() {
     return ipcRenderer.invoke('novel:window-close')

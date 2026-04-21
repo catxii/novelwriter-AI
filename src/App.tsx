@@ -1,9 +1,10 @@
 ﻿import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
 import MonacoEditor, { loader, type OnMount } from '@monaco-editor/react'
-import type { MouseEvent as ReactMouseEvent } from 'react'
+import type { CSSProperties, MouseEvent as ReactMouseEvent, WheelEvent as ReactWheelEvent } from 'react'
 import * as monacoApi from 'monaco-editor'
 import type * as Monaco from 'monaco-editor'
 import appLogo from '../icon/logo.png'
+import aiBlotIcon from '../icon/ai-blot.png'
 import writingIcon from '../icon/写作.png'
 import createIcon from '../icon/新建.png'
 import totalCharsIcon from '../icon/今日字数.png'
@@ -90,6 +91,19 @@ type ChapterKind = 'chapter' | 'special'
 type SpecialPageType = 'frontispiece' | 'prologue' | 'interlude' | 'afterword' | 'special'
 type WritingMode = 'novel' | 'script'
 type MemoryKind = 'info' | 'role'
+type RoleGraphView = 'list' | 'graph'
+type RoleLinkCorner = 'top-left' | 'top-right' | 'bottom-right' | 'bottom-left'
+type RoleLinkSide = 'top' | 'right' | 'bottom' | 'left'
+
+type RoleRelation = {
+  id: number
+  fromMemoryId: number
+  toMemoryId: number
+  fromAnchor?: RoleLinkCorner
+  toAnchor?: RoleLinkSide
+  relation: string
+  createdAt: string
+}
 
 type VersionHistoryItem = {
   id: number
@@ -127,6 +141,11 @@ type MemoryItem = {
   id: number
   kind: MemoryKind
   text: string
+  roleName?: string
+  roleNote?: string
+  roleStance?: number
+  roleX?: number
+  roleY?: number
   chapterId: number
   chapterTitle: string
   versionId: number
@@ -153,6 +172,7 @@ type WorkspaceData = {
   chapters?: LegacyChapter[]
   activeChapterId?: number
   memory?: Array<string | Partial<MemoryItem>>
+  roleRelations?: Array<Partial<RoleRelation>>
   writingMode?: WritingMode
   backups?: Array<Partial<BackupItem>>
   config?: Partial<ProviderConfig>
@@ -168,6 +188,7 @@ type NormalizedWorkspace = {
   activeChapterId: number
   writingMode: WritingMode
   memory: MemoryItem[]
+  roleRelations: RoleRelation[]
   backups: BackupItem[]
   config: ProviderConfig
   customPrompt: string
@@ -265,6 +286,17 @@ const VERSION_HISTORY_LIMIT = 10
 const VERSION_HISTORY_INTERVAL_MS = 4 * 60 * 60 * 1000
 const EDITOR_MENU_WIDTH = 260
 const EDITOR_MENU_HEIGHT = 400
+const ROLE_NODE_WIDTH = 188
+const ROLE_NODE_HEIGHT = 94
+const ROLE_LINK_CORNERS: RoleLinkCorner[] = [
+  'top-left',
+  'top-right',
+  'bottom-right',
+  'bottom-left'
+]
+const ROLE_GRAPH_MIN_SCALE = 0.4
+const ROLE_GRAPH_MAX_SCALE = 2.4
+const ROLE_GRAPH_ZOOM_FACTOR = 1.12
 const EDITOR_THEME_ID = 'novelwriter-dark'
 const SPECIAL_PAGE_META: Record<
   SpecialPageType,
@@ -354,6 +386,126 @@ function toCloudModelName(name: string) {
   const value = name.trim()
   if (!value) return ''
   return /-cloud(?::|$)/i.test(value) ? value : `${value}-cloud`
+}
+
+function clampNumber(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value))
+}
+
+function isTypingTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false
+  if (target.isContentEditable) return true
+  const tagName = target.tagName.toLowerCase()
+  if (tagName === 'input' || tagName === 'textarea' || tagName === 'select') return true
+  if (target.closest('[contenteditable="true"]')) return true
+  if (target.closest('.monaco-editor')) return true
+  return false
+}
+
+function getRoleCornerPoint(position: { x: number; y: number }, corner: RoleLinkCorner) {
+  switch (corner) {
+    case 'top-left':
+      return { x: position.x, y: position.y }
+    case 'top-right':
+      return { x: position.x + ROLE_NODE_WIDTH, y: position.y }
+    case 'bottom-right':
+      return { x: position.x + ROLE_NODE_WIDTH, y: position.y + ROLE_NODE_HEIGHT }
+    case 'bottom-left':
+      return { x: position.x, y: position.y + ROLE_NODE_HEIGHT }
+  }
+}
+
+function getRoleSidePoint(position: { x: number; y: number }, side: RoleLinkSide) {
+  switch (side) {
+    case 'top':
+      return { x: position.x + ROLE_NODE_WIDTH / 2, y: position.y }
+    case 'right':
+      return { x: position.x + ROLE_NODE_WIDTH, y: position.y + ROLE_NODE_HEIGHT / 2 }
+    case 'bottom':
+      return { x: position.x + ROLE_NODE_WIDTH / 2, y: position.y + ROLE_NODE_HEIGHT }
+    case 'left':
+      return { x: position.x, y: position.y + ROLE_NODE_HEIGHT / 2 }
+  }
+}
+
+function pickRoleSideForPoint(position: { x: number; y: number }, point: { x: number; y: number }) {
+  const distances: Array<{ side: RoleLinkSide; distance: number }> = [
+    { side: 'top', distance: Math.abs(point.y - position.y) },
+    {
+      side: 'right',
+      distance: Math.abs(point.x - (position.x + ROLE_NODE_WIDTH))
+    },
+    {
+      side: 'bottom',
+      distance: Math.abs(point.y - (position.y + ROLE_NODE_HEIGHT))
+    },
+    { side: 'left', distance: Math.abs(point.x - position.x) }
+  ]
+  distances.sort((a, b) => a.distance - b.distance)
+  return distances[0].side
+}
+
+function pickDefaultRoleCorner(
+  fromPos: { x: number; y: number },
+  toPos: { x: number; y: number }
+): RoleLinkCorner {
+  const fromCenterX = fromPos.x + ROLE_NODE_WIDTH / 2
+  const fromCenterY = fromPos.y + ROLE_NODE_HEIGHT / 2
+  const toCenterX = toPos.x + ROLE_NODE_WIDTH / 2
+  const toCenterY = toPos.y + ROLE_NODE_HEIGHT / 2
+  const towardRight = toCenterX >= fromCenterX
+  const towardBottom = toCenterY >= fromCenterY
+  if (towardRight && towardBottom) return 'bottom-right'
+  if (towardRight && !towardBottom) return 'top-right'
+  if (!towardRight && towardBottom) return 'bottom-left'
+  return 'top-left'
+}
+
+function pickDefaultRoleSide(
+  fromPos: { x: number; y: number },
+  toPos: { x: number; y: number }
+): RoleLinkSide {
+  const fromCenterX = fromPos.x + ROLE_NODE_WIDTH / 2
+  const fromCenterY = fromPos.y + ROLE_NODE_HEIGHT / 2
+  const toCenterX = toPos.x + ROLE_NODE_WIDTH / 2
+  const toCenterY = toPos.y + ROLE_NODE_HEIGHT / 2
+  const dx = fromCenterX - toCenterX
+  const dy = fromCenterY - toCenterY
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    return dx >= 0 ? 'right' : 'left'
+  }
+  return dy >= 0 ? 'bottom' : 'top'
+}
+
+function clampRoleStance(value: number) {
+  if (!Number.isFinite(value)) return 5
+  return Math.max(1, Math.min(10, Math.round(value)))
+}
+
+function getRoleStanceLabel(value: number) {
+  if (value <= 3) return '正派'
+  if (value >= 8) return '反派'
+  return '中立'
+}
+
+function buildRoleMemoryText(name: string, note: string) {
+  const normalizedName = name.trim()
+  const normalizedNote = note.trim()
+  if (!normalizedName) return normalizedNote
+  return normalizedNote ? `${normalizedName}：${normalizedNote}` : normalizedName
+}
+
+function parseLegacyRoleText(text: string) {
+  const raw = text.trim()
+  if (!raw) {
+    return { roleName: '新角色', roleNote: '' }
+  }
+  const match = raw.match(/^([^：:|\n]{1,64})[：:|]\s*(.+)$/)
+  if (!match) return { roleName: raw, roleNote: '' }
+  return {
+    roleName: match[1].trim() || raw,
+    roleNote: match[2].trim()
+  }
 }
 
 function countSnapshotChars(snapshot: NormalizedWorkspace) {
@@ -637,6 +789,7 @@ function createDefaultWorkspace(): NormalizedWorkspace {
     activeChapterId: firstChapter.id,
     writingMode: 'novel',
     memory: [],
+    roleRelations: [],
     backups: [],
     config: createDefaultConfig(),
     customPrompt: '为下一章提供 3 个悬念钩子。',
@@ -652,6 +805,7 @@ function toWorkspaceData(snapshot: NormalizedWorkspace): WorkspaceData {
     activeChapterId: snapshot.activeChapterId,
     writingMode: snapshot.writingMode,
     memory: snapshot.memory,
+    roleRelations: snapshot.roleRelations,
     backups: snapshot.backups,
     config: snapshot.config,
     customPrompt: snapshot.customPrompt,
@@ -689,59 +843,147 @@ function normalizeWorkspaceData(parsed: WorkspaceData): NormalizedWorkspace | nu
     chapters.find((chapter) => chapter.id === activeChapterId) ?? chapters[0]
 
   const memory: MemoryItem[] = Array.isArray(parsed.memory)
-    ? parsed.memory
-        .map((entry, index) => {
-          const text =
-            typeof entry === 'string'
-              ? entry
-              : typeof entry?.text === 'string'
-                ? entry.text
-                : ''
-          if (!text.trim()) return null
+    ? parsed.memory.reduce<MemoryItem[]>((acc, entry, index) => {
+        const text =
+          typeof entry === 'string'
+            ? entry
+            : typeof entry?.text === 'string'
+              ? entry.text
+              : ''
+        if (!text.trim()) return acc
 
-          const chapter =
+        const chapter =
+          typeof entry === 'object' &&
+          entry &&
+          typeof entry.chapterId === 'number' &&
+          chapters.some((item) => item.id === entry.chapterId)
+            ? (chapters.find((item) => item.id === entry.chapterId) ?? activeChapter)
+            : activeChapter
+        const version =
+          typeof entry === 'object' &&
+          entry &&
+          typeof entry.versionId === 'number' &&
+          chapter.versions.some((item) => item.id === entry.versionId)
+            ? (chapter.versions.find((item) => item.id === entry.versionId) ??
+              chapter.versions[0])
+            : (chapter.versions.find((item) => item.id === chapter.activeVersionId) ??
+              chapter.versions[0])
+
+        const kind: MemoryKind =
+          typeof entry === 'object' &&
+          entry &&
+          (entry.kind === 'role' || entry.kind === 'info')
+            ? entry.kind
+            : 'info'
+        const trimmedText = text.trim()
+        const parsedRole = kind === 'role' ? parseLegacyRoleText(trimmedText) : null
+        const roleName =
+          kind === 'role'
+            ? typeof entry === 'object' &&
+              entry &&
+              typeof entry.roleName === 'string' &&
+              entry.roleName.trim()
+              ? entry.roleName.trim()
+              : (parsedRole?.roleName ?? '新角色')
+            : undefined
+        const roleNote =
+          kind === 'role'
+            ? typeof entry === 'object' &&
+              entry &&
+              typeof entry.roleNote === 'string'
+              ? entry.roleNote
+              : (parsedRole?.roleNote ?? '')
+            : undefined
+        const roleStance =
+          kind === 'role'
+            ? clampRoleStance(
+                typeof entry === 'object' && entry && typeof entry.roleStance === 'number'
+                  ? entry.roleStance
+                  : 5
+              )
+            : undefined
+        const roleX =
+          kind === 'role' &&
+          typeof entry === 'object' &&
+          entry &&
+          typeof entry.roleX === 'number' &&
+          Number.isFinite(entry.roleX)
+            ? entry.roleX
+            : undefined
+        const roleY =
+          kind === 'role' &&
+          typeof entry === 'object' &&
+          entry &&
+          typeof entry.roleY === 'number' &&
+          Number.isFinite(entry.roleY)
+            ? entry.roleY
+            : undefined
+
+        acc.push({
+          id:
+            typeof entry === 'object' && entry && typeof entry.id === 'number'
+              ? entry.id
+              : Date.now() + index,
+          kind,
+          text:
+            kind === 'role' ? buildRoleMemoryText(roleName ?? '新角色', roleNote ?? '') : trimmedText,
+          roleName,
+          roleNote,
+          roleStance,
+          roleX,
+          roleY,
+          chapterId: chapter.id,
+          chapterTitle: chapter.title,
+          versionId: version.id,
+          versionTitle: version.title,
+          createdAt:
             typeof entry === 'object' &&
             entry &&
-            typeof entry.chapterId === 'number' &&
-            chapters.some((item) => item.id === entry.chapterId)
-              ? (chapters.find((item) => item.id === entry.chapterId) ?? activeChapter)
-              : activeChapter
-          const version =
-            typeof entry === 'object' &&
-            entry &&
-            typeof entry.versionId === 'number' &&
-            chapter.versions.some((item) => item.id === entry.versionId)
-              ? (chapter.versions.find((item) => item.id === entry.versionId) ??
-                chapter.versions[0])
-              : (chapter.versions.find((item) => item.id === chapter.activeVersionId) ??
-                chapter.versions[0])
-
-          return {
-            id:
-              typeof entry === 'object' && entry && typeof entry.id === 'number'
-                ? entry.id
-                : Date.now() + index,
-            kind:
-              typeof entry === 'object' &&
-              entry &&
-              (entry.kind === 'role' || entry.kind === 'info')
-                ? entry.kind
-                : 'info',
-            text: text.trim(),
-            chapterId: chapter.id,
-            chapterTitle: chapter.title,
-            versionId: version.id,
-            versionTitle: version.title,
-            createdAt:
-              typeof entry === 'object' &&
-              entry &&
-              typeof entry.createdAt === 'string' &&
-              entry.createdAt.trim()
-                ? entry.createdAt
-                : nowLabel()
-          }
+            typeof entry.createdAt === 'string' &&
+            entry.createdAt.trim()
+              ? entry.createdAt
+              : nowLabel()
         })
-        .filter((item): item is MemoryItem => item !== null)
+        return acc
+      }, [])
+    : []
+
+  const roleMemoryIds = new Set(memory.filter((item) => item.kind === 'role').map((item) => item.id))
+  const roleRelations: RoleRelation[] = Array.isArray(parsed.roleRelations)
+    ? parsed.roleRelations.reduce<RoleRelation[]>((acc, entry, index) => {
+        if (!entry || typeof entry !== 'object') return acc
+        const fromMemoryId = typeof entry.fromMemoryId === 'number' ? entry.fromMemoryId : NaN
+        const toMemoryId = typeof entry.toMemoryId === 'number' ? entry.toMemoryId : NaN
+        if (!Number.isFinite(fromMemoryId) || !Number.isFinite(toMemoryId)) return acc
+        if (!roleMemoryIds.has(fromMemoryId) || !roleMemoryIds.has(toMemoryId)) return acc
+        const relation =
+          typeof entry.relation === 'string' && entry.relation.trim() ? entry.relation.trim() : ''
+        const fromAnchor: RoleLinkCorner | undefined =
+          entry.fromAnchor === 'top-left' ||
+          entry.fromAnchor === 'top-right' ||
+          entry.fromAnchor === 'bottom-right' ||
+          entry.fromAnchor === 'bottom-left'
+            ? entry.fromAnchor
+            : undefined
+        const toAnchor: RoleLinkSide | undefined =
+          entry.toAnchor === 'top' ||
+          entry.toAnchor === 'right' ||
+          entry.toAnchor === 'bottom' ||
+          entry.toAnchor === 'left'
+            ? entry.toAnchor
+            : undefined
+        acc.push({
+          id: typeof entry.id === 'number' ? entry.id : Date.now() + index,
+          fromMemoryId,
+          toMemoryId,
+          ...(fromAnchor ? { fromAnchor } : {}),
+          ...(toAnchor ? { toAnchor } : {}),
+          relation,
+          createdAt:
+            typeof entry.createdAt === 'string' && entry.createdAt.trim() ? entry.createdAt : nowLabel()
+        })
+        return acc
+      }, [])
     : []
 
   const backups: BackupItem[] = Array.isArray(parsed.backups)
@@ -802,6 +1044,7 @@ function normalizeWorkspaceData(parsed: WorkspaceData): NormalizedWorkspace | nu
     activeChapterId,
     writingMode: parsed.writingMode === 'script' ? 'script' : 'novel',
     memory,
+    roleRelations,
     backups,
     config,
     customPrompt:
@@ -899,6 +1142,7 @@ function App() {
   const editorPaneRef = useRef<HTMLElement | null>(null)
   const assistantDialogRef = useRef<HTMLDivElement | null>(null)
   const assistantMessagesViewportRef = useRef<HTMLDivElement | null>(null)
+  const autoConnectAttemptKeyRef = useRef('')
   const legacyWorkspace = useMemo(() => loadLegacyWorkspace(), [])
   const initialWorkspace = useMemo(
     () => legacyWorkspace ?? createDefaultWorkspace(),
@@ -916,6 +1160,10 @@ function App() {
   const [newProjectName, setNewProjectName] = useState('')
   const [appLanguage, setAppLanguage] = useState<AppLanguage>('zh-CN')
   const [projectStorageDir, setProjectStorageDir] = useState('')
+  const [autoUpdateEnabled, setAutoUpdateEnabled] = useState(true)
+  const [autoLaunchEnabled, setAutoLaunchEnabled] = useState(true)
+  const [appVersionLabel, setAppVersionLabel] = useState('v 1.1 bate')
+  const [isCheckingAppUpgrade, setIsCheckingAppUpgrade] = useState(false)
   const [isApplyingProjectSettings, setIsApplyingProjectSettings] = useState(false)
   const [projectSettingsNotice, setProjectSettingsNotice] = useState<{
     kind: 'success' | 'error'
@@ -923,6 +1171,7 @@ function App() {
   } | null>(null)
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null)
   const [renamingProjectId, setRenamingProjectId] = useState<string | null>(null)
+  const [isImportingProjects, setIsImportingProjects] = useState(false)
   const [pendingDeleteProject, setPendingDeleteProject] = useState<ProjectMeta | null>(null)
   const [deleteProjectConfirmName, setDeleteProjectConfirmName] = useState('')
   const [deleteProjectConfirmError, setDeleteProjectConfirmError] = useState('')
@@ -939,6 +1188,9 @@ function App() {
   const [activeChapterId, setActiveChapterId] = useState(initialWorkspace.activeChapterId)
   const [writingMode, setWritingMode] = useState<WritingMode>(initialWorkspace.writingMode)
   const [memory, setMemory] = useState<MemoryItem[]>(initialWorkspace.memory)
+  const [roleRelations, setRoleRelations] = useState<RoleRelation[]>(
+    initialWorkspace.roleRelations
+  )
   const [backups, setBackups] = useState<BackupItem[]>(initialWorkspace.backups)
   const [config, setConfig] = useState<ProviderConfig>(initialWorkspace.config)
   const [activePanel, setActivePanel] = useState<ActivePanel>('memory')
@@ -982,6 +1234,44 @@ function App() {
   const [editingSkillName, setEditingSkillName] = useState('')
   const [memorySearchQuery, setMemorySearchQuery] = useState('')
   const [memoryModule, setMemoryModule] = useState<MemoryKind>('info')
+  const [roleGraphView, setRoleGraphView] = useState<RoleGraphView>('list')
+  const [isRoleGraphFullscreen, setIsRoleGraphFullscreen] = useState(false)
+  const [roleGraphViewport, setRoleGraphViewport] = useState({
+    x: 0,
+    y: 0,
+    scale: 1
+  })
+  const [isRoleGraphSpacePressed, setIsRoleGraphSpacePressed] = useState(false)
+  const [isRoleGraphPanning, setIsRoleGraphPanning] = useState(false)
+  const [roleEditorDialog, setRoleEditorDialog] = useState<{
+    roleId: number
+    roleName: string
+    roleNote: string
+    roleStance: number
+  } | null>(null)
+  const [draggingRoleId, setDraggingRoleId] = useState<number | null>(null)
+  const [hoveredRoleId, setHoveredRoleId] = useState<number | null>(null)
+  const [roleDragOffset, setRoleDragOffset] = useState({ x: 0, y: 0 })
+  const [roleLinkStart, setRoleLinkStart] = useState<{
+    roleId: number
+    corner: RoleLinkCorner
+  } | null>(null)
+  const [roleLinkTarget, setRoleLinkTarget] = useState<{
+    roleId: number
+    side: RoleLinkSide
+  } | null>(null)
+  const [roleLinkPreview, setRoleLinkPreview] = useState<{ x: number; y: number } | null>(null)
+  const [roleRelationMenu, setRoleRelationMenu] = useState<{
+    open: boolean
+    x: number
+    y: number
+    relationId: number | null
+  }>({
+    open: false,
+    x: 0,
+    y: 0,
+    relationId: null
+  })
   const [backupSearchQuery, setBackupSearchQuery] = useState('')
   const [isAdvancedSettingsOpen, setIsAdvancedSettingsOpen] = useState(false)
   const [isVersionHistoryOpen, setIsVersionHistoryOpen] = useState(false)
@@ -998,6 +1288,14 @@ function App() {
     value: string
   } | null>(null)
   const [isWorkspaceBootstrapping, setIsWorkspaceBootstrapping] = useState(true)
+  const roleGraphBoardRef = useRef<HTMLDivElement | null>(null)
+  const roleGraphPanStartRef = useRef<{
+    clientX: number
+    clientY: number
+    originX: number
+    originY: number
+  } | null>(null)
+  const roleRelationMenuRef = useRef<HTMLDivElement | null>(null)
 
   const activeProject = useMemo(
     () => projects.find((project) => project.id === activeProjectId) ?? null,
@@ -1037,6 +1335,13 @@ function App() {
       : connectionState === 'failed'
         ? 'is-failed'
         : 'is-idle'
+  const isConnecting = connectionState === 'checking'
+  const connectionActionLabel =
+    connectionState === 'connected'
+      ? '测试连接'
+      : isConnecting
+        ? '连接中...'
+        : '立即连接'
   const currentSessionKey =
     activeChapter && activeVersion ? `${activeChapter.id}:${activeVersion.id}` : ''
   const currentSessionId = currentSessionKey ? (sessionMap[currentSessionKey] ?? '') : ''
@@ -1093,10 +1398,60 @@ function App() {
     const scoped = memory.filter((item) => item.kind === memoryModule)
     if (!keyword) return scoped
     return scoped.filter((item) => {
-      const haystack = `${item.text}\n${item.chapterTitle}\n${item.versionTitle}`.toLowerCase()
+      const haystack = `${item.text}\n${item.roleName ?? ''}\n${item.roleNote ?? ''}\n${item.chapterTitle}\n${item.versionTitle}`.toLowerCase()
       return haystack.includes(keyword)
     })
   }, [memory, memorySearchQuery, memoryModule])
+  const allRoleMemory = useMemo(
+    () => memory.filter((item) => item.kind === 'role'),
+    [memory]
+  )
+  const visibleRoleMemory = useMemo(
+    () => filteredMemory.filter((item) => item.kind === 'role'),
+    [filteredMemory]
+  )
+  const roleNameById = useMemo(() => {
+    const map = new Map<number, string>()
+    for (const role of allRoleMemory) {
+      const parsed = parseLegacyRoleText(role.text)
+      const name = (role.roleName?.trim() || parsed.roleName || `角色${role.id}`).trim()
+      map.set(role.id, name)
+    }
+    return map
+  }, [allRoleMemory])
+  const visibleRoleIds = useMemo(
+    () => new Set(visibleRoleMemory.map((item) => item.id)),
+    [visibleRoleMemory]
+  )
+  const visibleRoleRelations = useMemo(
+    () =>
+      roleRelations.filter(
+        (relation) =>
+          visibleRoleIds.has(relation.fromMemoryId) && visibleRoleIds.has(relation.toMemoryId)
+      ),
+    [roleRelations, visibleRoleIds]
+  )
+  const visibleRolePositionById = useMemo(() => {
+    const map = new Map<number, { x: number; y: number }>()
+    visibleRoleMemory.forEach((item, index) => {
+      map.set(item.id, getRoleNodePosition(item, index))
+    })
+    return map
+  }, [visibleRoleMemory])
+  const isRoleGraphActive = activeScreen === 'writer' && memoryModule === 'role' && roleGraphView === 'graph'
+  const roleGraphGridSize = Math.max(8, 24 * roleGraphViewport.scale)
+  const roleGraphGridOffsetX =
+    ((roleGraphViewport.x % roleGraphGridSize) + roleGraphGridSize) % roleGraphGridSize
+  const roleGraphGridOffsetY =
+    ((roleGraphViewport.y % roleGraphGridSize) + roleGraphGridSize) % roleGraphGridSize
+  const roleGraphBoardStyle: CSSProperties = {
+    '--role-graph-grid-size': `${roleGraphGridSize}px`,
+    '--role-graph-grid-offset-x': `${roleGraphGridOffsetX}px`,
+    '--role-graph-grid-offset-y': `${roleGraphGridOffsetY}px`
+  } as CSSProperties
+  const roleGraphViewportStyle: CSSProperties = {
+    transform: `translate(${roleGraphViewport.x}px, ${roleGraphViewport.y}px) scale(${roleGraphViewport.scale})`
+  }
   const filteredBackups = useMemo(() => {
     const keyword = backupSearchQuery.trim().toLowerCase()
     if (!keyword) return backups
@@ -1124,12 +1479,117 @@ function App() {
     return labelMap
   }, [chapters])
 
+  function getRoleName(item: MemoryItem) {
+    if (item.kind !== 'role') return ''
+    const parsed = parseLegacyRoleText(item.text)
+    return (item.roleName?.trim() || parsed.roleName || `角色${item.id}`).trim()
+  }
+
+  function getRoleNote(item: MemoryItem) {
+    if (item.kind !== 'role') return ''
+    if (typeof item.roleNote === 'string') return item.roleNote
+    const parsed = parseLegacyRoleText(item.text)
+    return parsed.roleNote
+  }
+
+  function getRoleStance(item: MemoryItem) {
+    if (item.kind !== 'role') return 5
+    return clampRoleStance(typeof item.roleStance === 'number' ? item.roleStance : 5)
+  }
+
+  function getRoleNodePosition(item: MemoryItem, index: number) {
+    const defaultX = 28 + (index % 2) * 236
+    const defaultY = 28 + Math.floor(index / 2) * 132
+    return {
+      x: Number.isFinite(item.roleX as number) ? (item.roleX as number) : defaultX,
+      y: Number.isFinite(item.roleY as number) ? (item.roleY as number) : defaultY
+    }
+  }
+
+  function getRoleGraphPointFromClient(clientX: number, clientY: number) {
+    const board = roleGraphBoardRef.current
+    if (!board) return null
+    const rect = board.getBoundingClientRect()
+    return {
+      x: (clientX - rect.left - roleGraphViewport.x) / roleGraphViewport.scale,
+      y: (clientY - rect.top - roleGraphViewport.y) / roleGraphViewport.scale
+    }
+  }
+
+  function getRoleLinkTargetByPoint(
+    point: { x: number; y: number },
+    ignoreRoleId: number
+  ): { roleId: number; side: RoleLinkSide } | null {
+    const detectionMargin = 18
+    for (const item of visibleRoleMemory) {
+      if (item.id === ignoreRoleId) continue
+      const position =
+        visibleRolePositionById.get(item.id) ?? getRoleNodePosition(item, 0)
+      const minX = position.x - detectionMargin
+      const maxX = position.x + ROLE_NODE_WIDTH + detectionMargin
+      const minY = position.y - detectionMargin
+      const maxY = position.y + ROLE_NODE_HEIGHT + detectionMargin
+      if (point.x < minX || point.x > maxX || point.y < minY || point.y > maxY) continue
+      return {
+        roleId: item.id,
+        side: pickRoleSideForPoint(position, point)
+      }
+    }
+    return null
+  }
+
+  function centerRoleGraphToNodes() {
+    const board = roleGraphBoardRef.current
+    if (!board) return
+    if (!visibleRoleMemory.length) {
+      setRoleGraphViewport({ x: 0, y: 0, scale: 1 })
+      return
+    }
+    let minX = Number.POSITIVE_INFINITY
+    let minY = Number.POSITIVE_INFINITY
+    let maxX = Number.NEGATIVE_INFINITY
+    let maxY = Number.NEGATIVE_INFINITY
+    visibleRoleMemory.forEach((item, index) => {
+      const position = visibleRolePositionById.get(item.id) ?? getRoleNodePosition(item, index)
+      minX = Math.min(minX, position.x)
+      minY = Math.min(minY, position.y)
+      maxX = Math.max(maxX, position.x + ROLE_NODE_WIDTH)
+      maxY = Math.max(maxY, position.y + ROLE_NODE_HEIGHT)
+    })
+    if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
+      setRoleGraphViewport({ x: 0, y: 0, scale: 1 })
+      return
+    }
+    const boardWidth = Math.max(1, board.clientWidth)
+    const boardHeight = Math.max(1, board.clientHeight)
+    const padding = 32
+    const boundsWidth = Math.max(1, maxX - minX)
+    const boundsHeight = Math.max(1, maxY - minY)
+    const fitScale = Math.min(
+      (boardWidth - padding * 2) / boundsWidth,
+      (boardHeight - padding * 2) / boundsHeight
+    )
+    const nextScale = clampNumber(
+      Math.min(1, Number.isFinite(fitScale) ? fitScale : 1),
+      ROLE_GRAPH_MIN_SCALE,
+      ROLE_GRAPH_MAX_SCALE
+    )
+    const nextX = (boardWidth - boundsWidth * nextScale) / 2 - minX * nextScale
+    const nextY = (boardHeight - boundsHeight * nextScale) / 2 - minY * nextScale
+    setRoleGraphViewport({
+      x: Number.isFinite(nextX) ? nextX : 0,
+      y: Number.isFinite(nextY) ? nextY : 0,
+      scale: Number.isFinite(nextScale) ? nextScale : 1
+    })
+  }
+
   function buildWorkspaceSnapshot(): NormalizedWorkspace {
     return {
       chapters,
       activeChapterId,
       writingMode,
       memory,
+      roleRelations,
       backups,
       config,
       customPrompt,
@@ -1144,6 +1604,7 @@ function App() {
     setActiveChapterId(snapshot.activeChapterId)
     setWritingMode(snapshot.writingMode)
     setMemory(snapshot.memory)
+    setRoleRelations(snapshot.roleRelations)
     setBackups(snapshot.backups)
     setConfig(snapshot.config)
     setCustomPrompt(snapshot.customPrompt)
@@ -1156,6 +1617,18 @@ function App() {
     setConnectionState('unknown')
     setMemorySearchQuery('')
     setMemoryModule('info')
+    setRoleGraphView('list')
+    setRoleGraphViewport({ x: 0, y: 0, scale: 1 })
+    setIsRoleGraphSpacePressed(false)
+    setIsRoleGraphPanning(false)
+    roleGraphPanStartRef.current = null
+    setRoleEditorDialog(null)
+    setDraggingRoleId(null)
+    setHoveredRoleId(null)
+    setRoleLinkStart(null)
+    setRoleLinkTarget(null)
+    setRoleLinkPreview(null)
+    setRoleRelationMenu({ open: false, x: 0, y: 0, relationId: null })
     setBackupSearchQuery('')
     setIsAdvancedSettingsOpen(false)
   }
@@ -1383,10 +1856,15 @@ function App() {
       await syncAllProjectsToDisk(projects)
       const response = await window.novelDesktopApi.updateProjectSettings({
         language: appLanguage,
-        projectsDir: projectStorageDir
+        projectsDir: projectStorageDir,
+        autoUpdate: autoUpdateEnabled,
+        autoLaunch: autoLaunchEnabled
       })
       setAppLanguage(response.settings.language)
       setProjectStorageDir(response.settings.projectsDir)
+      setAutoUpdateEnabled(response.settings.autoUpdate)
+      setAutoLaunchEnabled(response.settings.autoLaunch)
+      setAppVersionLabel(response.settings.appVersion || 'v 1.1 bate')
       setStatus('项目设置已更新')
       setProjectSettingsNotice({
         kind: 'success',
@@ -1410,6 +1888,41 @@ function App() {
     const response = await window.novelDesktopApi.pickProjectStorageDir()
     if (!response.canceled && response.path) {
       setProjectStorageDir(response.path)
+    }
+  }
+
+  async function checkAppUpgrade() {
+    if (!window.novelDesktopApi?.checkAppUpgrade) {
+      setProjectSettingsNotice({
+        kind: 'error',
+        message: t('当前环境不支持软件升级检测', 'Upgrade check is not available in this environment')
+      })
+      return
+    }
+    if (isCheckingAppUpgrade) return
+    setIsCheckingAppUpgrade(true)
+    try {
+      const payload = await window.novelDesktopApi.checkAppUpgrade()
+      setAppVersionLabel(payload.currentVersion || appVersionLabel)
+      setProjectSettingsNotice({
+        kind: 'success',
+        message: payload.hasUpdate
+          ? t(
+              `发现新版本：${payload.latestVersion}`,
+              `New version available: ${payload.latestVersion}`
+            )
+          : t(
+              `已是最新版本（${payload.currentVersion}）`,
+              `You're up to date (${payload.currentVersion})`
+            )
+      })
+    } catch (err) {
+      setProjectSettingsNotice({
+        kind: 'error',
+        message: err instanceof Error ? err.message : t('检查升级失败', 'Upgrade check failed')
+      })
+    } finally {
+      setIsCheckingAppUpgrade(false)
     }
   }
 
@@ -1463,6 +1976,77 @@ function App() {
     setStatus(`已创建项目：${nextName}`)
   }
 
+  async function importProjectsFromDisk() {
+    if (!window.novelDesktopApi?.importProjectPackages) {
+      const message = t('仅桌面版支持导入作品', 'Import is only available in desktop app.')
+      setStatus(message)
+      window.alert(message)
+      return
+    }
+    if (isImportingProjects) return
+    setIsImportingProjects(true)
+    try {
+      const response = await window.novelDesktopApi.importProjectPackages()
+      if (response.canceled) {
+        setStatus(t('已取消导入作品', 'Import canceled'))
+        return
+      }
+
+      const importedItems = Array.isArray(response.imported) ? response.imported : []
+      const importedMetas = importedItems
+        .map((item) => {
+          const id = String(item?.id || '').trim()
+          const name = String(item?.name || '').trim()
+          if (!id || !name) return null
+          const normalized =
+            normalizeWorkspaceData((item.workspace ?? {}) as WorkspaceData) ?? createDefaultWorkspace()
+          saveProjectWorkspace(id, normalized)
+          const existing = projects.find((project) => project.id === id)
+          const now = nowLabel()
+          return {
+            id,
+            name,
+            createdAt: existing?.createdAt ?? now,
+            updatedAt: now
+          } as ProjectMeta
+        })
+        .filter((item): item is ProjectMeta => item !== null)
+
+      if (importedMetas.length === 0) {
+        setStatus(t('未发现可导入的项目', 'No importable projects found'))
+        return
+      }
+
+      const dedupImported: ProjectMeta[] = []
+      const importedIdSet = new Set<string>()
+      for (const meta of importedMetas) {
+        if (importedIdSet.has(meta.id)) continue
+        importedIdSet.add(meta.id)
+        dedupImported.push(meta)
+      }
+      const nextProjects = [
+        ...dedupImported,
+        ...projects.filter((project) => !importedIdSet.has(project.id))
+      ]
+      setProjects(nextProjects)
+      saveProjectIndex(nextProjects)
+      await syncProjectsIndexToDisk(nextProjects)
+      setError('')
+      if (response.skippedCount > 0) {
+        setStatus(`已导入 ${dedupImported.length} 个作品，跳过 ${response.skippedCount} 个`)
+      } else {
+        setStatus(`已导入 ${dedupImported.length} 个作品`)
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : t('导入作品失败', 'Import failed')
+      setError(message)
+      setStatus(message)
+      window.alert(t(`导入作品失败：${message}`, `Failed to import projects: ${message}`))
+    } finally {
+      setIsImportingProjects(false)
+    }
+  }
+
   function openProjectCenter() {
     setProjects(loadProjectIndex())
     setProjectCenterView('home')
@@ -1508,6 +2092,9 @@ function App() {
         if (cancelled) return
         setAppLanguage(settings.language)
         setProjectStorageDir(settings.projectsDir)
+        setAutoUpdateEnabled(settings.autoUpdate)
+        setAutoLaunchEnabled(settings.autoLaunch)
+        setAppVersionLabel(settings.appVersion || 'v 1.1 bate')
       })
       .catch(() => {})
     return () => {
@@ -1600,7 +2187,7 @@ function App() {
     const now = nowLabel()
     const migrated: ProjectMeta = {
       id: createProjectId(),
-      name: '迁移项目',
+      name: '示范项目',
       createdAt: now,
       updatedAt: now
     }
@@ -1632,6 +2219,7 @@ function App() {
     chapters,
     activeChapterId,
     memory,
+    roleRelations,
     backups,
     config,
     customPrompt,
@@ -1641,6 +2229,91 @@ function App() {
     activeScreen,
     isWorkspaceBootstrapping
   ])
+
+  useEffect(() => {
+    if (activeScreen === 'writer') return
+    autoConnectAttemptKeyRef.current = ''
+  }, [activeScreen])
+
+  useEffect(() => {
+    if (memoryModule === 'role') return
+    setRoleEditorDialog(null)
+    setDraggingRoleId(null)
+    setHoveredRoleId(null)
+    setRoleLinkStart(null)
+    setRoleLinkTarget(null)
+    setRoleLinkPreview(null)
+    setRoleRelationMenu({ open: false, x: 0, y: 0, relationId: null })
+    setIsRoleGraphSpacePressed(false)
+    setIsRoleGraphPanning(false)
+    roleGraphPanStartRef.current = null
+  }, [memoryModule])
+
+  useEffect(() => {
+    if (isRoleGraphActive) return
+    setHoveredRoleId(null)
+    setRoleLinkStart(null)
+    setRoleLinkTarget(null)
+    setRoleLinkPreview(null)
+    setRoleRelationMenu({ open: false, x: 0, y: 0, relationId: null })
+    setIsRoleGraphSpacePressed(false)
+    setIsRoleGraphPanning(false)
+    roleGraphPanStartRef.current = null
+  }, [isRoleGraphActive])
+
+  useEffect(() => {
+    if (!isRoleGraphActive || !isRoleGraphFullscreen) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.code !== 'Space') return
+      if (isTypingTarget(event.target)) return
+      event.preventDefault()
+      setIsRoleGraphSpacePressed(true)
+    }
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (event.code !== 'Space') return
+      setIsRoleGraphSpacePressed(false)
+      setIsRoleGraphPanning(false)
+      roleGraphPanStartRef.current = null
+    }
+    const onBlur = () => {
+      setIsRoleGraphSpacePressed(false)
+      setIsRoleGraphPanning(false)
+      roleGraphPanStartRef.current = null
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    window.addEventListener('keyup', onKeyUp, true)
+    window.addEventListener('blur', onBlur)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown, true)
+      window.removeEventListener('keyup', onKeyUp, true)
+      window.removeEventListener('blur', onBlur)
+    }
+  }, [isRoleGraphActive, isRoleGraphFullscreen])
+
+  useEffect(() => {
+    if (isRoleGraphFullscreen) return
+    setIsRoleGraphSpacePressed(false)
+    setIsRoleGraphPanning(false)
+    roleGraphPanStartRef.current = null
+  }, [isRoleGraphFullscreen])
+
+  useEffect(() => {
+    if (!isRoleGraphActive || isRoleGraphFullscreen) return
+    centerRoleGraphToNodes()
+  }, [isRoleGraphActive, isRoleGraphFullscreen, visibleRoleMemory.length])
+
+  useEffect(() => {
+    if (!isRoleGraphActive || isRoleGraphFullscreen) return
+    const board = roleGraphBoardRef.current
+    if (!board || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => {
+      centerRoleGraphToNodes()
+    })
+    observer.observe(board)
+    return () => {
+      observer.disconnect()
+    }
+  }, [isRoleGraphActive, isRoleGraphFullscreen])
 
   useEffect(() => {
     localStorage.setItem(LAST_SCREEN_KEY, activeScreen)
@@ -1823,6 +2496,31 @@ function App() {
   }, [editorContextMenu.open])
 
   useEffect(() => {
+    if (!roleRelationMenu.open) return
+
+    const closeMenu = () => {
+      setRoleRelationMenu({ open: false, x: 0, y: 0, relationId: null })
+    }
+    const onPointerDown = (event: MouseEvent) => {
+      if (roleRelationMenuRef.current?.contains(event.target as Node)) return
+      closeMenu()
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        closeMenu()
+      }
+    }
+
+    window.addEventListener('mousedown', onPointerDown)
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => {
+      window.removeEventListener('mousedown', onPointerDown)
+      window.removeEventListener('keydown', onKeyDown, true)
+    }
+  }, [roleRelationMenu.open])
+
+  useEffect(() => {
     if (!window.novelDesktopApi?.listSkills) return
     let cancelled = false
     void window.novelDesktopApi
@@ -1859,6 +2557,7 @@ function App() {
   const hasDesktopProjectStorage = Boolean(
     window.novelDesktopApi?.getProjectSettings && window.novelDesktopApi?.openProjectPackage
   )
+  const hasDesktopProjectImport = Boolean(window.novelDesktopApi?.importProjectPackages)
   const hasDesktopWindowClose = Boolean(window.novelDesktopApi?.closeWindow)
   const hasDesktopWindowControls = Boolean(window.novelDesktopApi?.isDesktop)
   const dashboardGreeting =
@@ -2256,6 +2955,131 @@ function App() {
   useEffect(() => {
     setConnectionState('unknown')
   }, [config.kind, config.baseUrl, config.model, config.apiKey])
+
+  useEffect(() => {
+    const roleIds = new Set(allRoleMemory.map((item) => item.id))
+    setRoleRelations((previous) => {
+      const filtered = previous.filter(
+        (relation) => roleIds.has(relation.fromMemoryId) && roleIds.has(relation.toMemoryId)
+      )
+      if (filtered.length === previous.length) return previous
+      return filtered
+    })
+  }, [allRoleMemory])
+
+  useEffect(() => {
+    const onFullscreenChange = () => {
+      const board = roleGraphBoardRef.current
+      setIsRoleGraphFullscreen(Boolean(board) && document.fullscreenElement === board)
+    }
+    document.addEventListener('fullscreenchange', onFullscreenChange)
+    onFullscreenChange()
+    return () => {
+      document.removeEventListener('fullscreenchange', onFullscreenChange)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (draggingRoleId === null && roleLinkStart === null && !isRoleGraphPanning) return
+    const onPointerMove = (event: MouseEvent) => {
+      if (isRoleGraphPanning) {
+        const start = roleGraphPanStartRef.current
+        if (!start) return
+        setRoleGraphViewport((previous) => ({
+          ...previous,
+          x: start.originX + (event.clientX - start.clientX),
+          y: start.originY + (event.clientY - start.clientY)
+        }))
+        return
+      }
+      const pointer = getRoleGraphPointFromClient(event.clientX, event.clientY)
+      if (!pointer) return
+      if (roleLinkStart !== null) {
+        const nextTarget = getRoleLinkTargetByPoint(pointer, roleLinkStart.roleId)
+        setRoleLinkTarget(nextTarget)
+        if (nextTarget) {
+          const nextPosition = visibleRolePositionById.get(nextTarget.roleId)
+          if (nextPosition) {
+            setRoleLinkPreview(getRoleSidePoint(nextPosition, nextTarget.side))
+          } else {
+            setRoleLinkPreview(pointer)
+          }
+        } else {
+          setRoleLinkPreview(pointer)
+        }
+      }
+      if (draggingRoleId === null) return
+      const nextX = Math.max(0, pointer.x - roleDragOffset.x)
+      const nextY = Math.max(0, pointer.y - roleDragOffset.y)
+      updateRoleMemory(draggingRoleId, { roleX: nextX, roleY: nextY })
+    }
+    const onPointerUp = (event: MouseEvent) => {
+      const wasPanning = isRoleGraphPanning
+      if (isRoleGraphPanning) {
+        setIsRoleGraphPanning(false)
+        roleGraphPanStartRef.current = null
+      }
+      if (wasPanning) return
+      if (draggingRoleId !== null) {
+        setDraggingRoleId(null)
+      }
+      if (roleLinkStart !== null) {
+        const pointer = getRoleGraphPointFromClient(event.clientX, event.clientY)
+        const finalTarget =
+          pointer !== null ? getRoleLinkTargetByPoint(pointer, roleLinkStart.roleId) : null
+        if (finalTarget && finalTarget.roleId !== roleLinkStart.roleId) {
+          updateOrCreateRoleRelation(
+            roleLinkStart.roleId,
+            finalTarget.roleId,
+            roleLinkStart.corner,
+            finalTarget.side
+          )
+        }
+      }
+      setRoleLinkStart(null)
+      setRoleLinkTarget(null)
+      setRoleLinkPreview(null)
+    }
+    window.addEventListener('mousemove', onPointerMove)
+    window.addEventListener('mouseup', onPointerUp)
+    return () => {
+      window.removeEventListener('mousemove', onPointerMove)
+      window.removeEventListener('mouseup', onPointerUp)
+    }
+  }, [
+    draggingRoleId,
+    roleDragOffset.x,
+    roleDragOffset.y,
+    roleLinkStart,
+    isRoleGraphPanning,
+    roleGraphViewport.x,
+    roleGraphViewport.y,
+    roleGraphViewport.scale
+  ])
+
+  useEffect(() => {
+    if (isWorkspaceBootstrapping) return
+    if (activeScreen !== 'writer') return
+    if (!activeProjectId) return
+    if (config.kind !== 'ollama') return
+    if (!config.model.trim()) return
+    if (connectionState === 'connected' || connectionState === 'checking') return
+    const baseUrl = normalizeBaseUrl(config.baseUrl, 'ollama')
+    if (!baseUrl) return
+
+    const attemptKey = `${activeProjectId}|${baseUrl}|${config.model.trim()}`
+    if (autoConnectAttemptKeyRef.current === attemptKey) return
+    autoConnectAttemptKeyRef.current = attemptKey
+    void testConnection({ auto: true })
+  }, [
+    activeScreen,
+    activeProjectId,
+    config.kind,
+    config.baseUrl,
+    config.model,
+    connectionState,
+    isWorkspaceBootstrapping
+  ])
 
   useEffect(() => {
     if (!assistantDialogDragging) return
@@ -2823,10 +3647,19 @@ function App() {
         const key = `${kind}:${chapter.id}:${version.id}:${text}`
         if (existing.has(key)) continue
         existing.add(key)
+        const parsedRole = kind === 'role' ? parseLegacyRoleText(text) : null
         merged.push({
           id: nextId,
           kind,
-          text,
+          text:
+            kind === 'role'
+              ? buildRoleMemoryText(parsedRole?.roleName ?? text, parsedRole?.roleNote ?? '')
+              : text,
+          roleName: kind === 'role' ? (parsedRole?.roleName ?? text) : undefined,
+          roleNote: kind === 'role' ? (parsedRole?.roleNote ?? '') : undefined,
+          roleStance: kind === 'role' ? 5 : undefined,
+          roleX: kind === 'role' ? 28 + (merged.length % 2) * 236 : undefined,
+          roleY: kind === 'role' ? 28 + Math.floor(merged.length / 2) * 132 : undefined,
           chapterId: chapter.id,
           chapterTitle: chapter.title,
           versionId: version.id,
@@ -2837,6 +3670,65 @@ function App() {
         nextId += 1
       }
       return changed ? merged : previous
+    })
+  }
+
+  function appendMemoryItem(
+    kind: MemoryKind,
+    options?: {
+      text?: string
+      roleName?: string
+      roleNote?: string
+      roleStance?: number
+      roleX?: number
+      roleY?: number
+    }
+  ) {
+    const chapter = activeChapter ?? chapters[0]
+    const version =
+      activeVersion ??
+      chapter?.versions.find((item) => item.id === chapter.activeVersionId) ??
+      chapter?.versions[0]
+    if (!chapter || !version) return
+
+    const createdAt = nowLabel()
+    setMemory((previous) => {
+      const nextId = previous.reduce((max, item) => Math.max(max, item.id), 0) + 1
+      const roleIndex = previous.filter((item) => item.kind === 'role').length
+      const roleName = (options?.roleName ?? '新角色').trim() || `角色${nextId}`
+      const roleNote = options?.roleNote ?? ''
+      const nextRoleX =
+        typeof options?.roleX === 'number'
+          ? Math.max(0, options.roleX)
+          : 28 + (roleIndex % 2) * 236
+      const nextRoleY =
+        typeof options?.roleY === 'number'
+          ? Math.max(0, options.roleY)
+          : 28 + Math.floor(roleIndex / 2) * 132
+      return [
+        ...previous,
+        {
+          id: nextId,
+          kind,
+          text:
+            kind === 'role'
+              ? buildRoleMemoryText(roleName, roleNote)
+              : (options?.text?.trim() || '新记忆：'),
+          roleName: kind === 'role' ? roleName : undefined,
+          roleNote: kind === 'role' ? roleNote : undefined,
+          roleStance:
+            kind === 'role'
+              ? clampRoleStance(typeof options?.roleStance === 'number' ? options.roleStance : 5)
+              : undefined,
+          roleX: kind === 'role' ? nextRoleX : undefined,
+          roleY: kind === 'role' ? nextRoleY : undefined,
+          chapterId: chapter.id,
+          chapterTitle: chapter.title,
+          versionId: version.id,
+          versionTitle: version.title,
+          createdAt
+        }
+      ]
     })
   }
 
@@ -2858,6 +3750,317 @@ function App() {
     const roleNames = extractRoleNamesFromDraft(draft)
     if (!roleNames.length) return
     appendMemoryItems(roleNames, 'role')
+  }
+
+  function updateRoleMemory(
+    roleId: number,
+    patch: Partial<Pick<MemoryItem, 'roleName' | 'roleNote' | 'roleStance' | 'roleX' | 'roleY'>>
+  ) {
+    setMemory((previous) =>
+      previous.map((item) => {
+        if (item.id !== roleId || item.kind !== 'role') return item
+        const nextName = (patch.roleName ?? getRoleName(item)).trim() || `角色${item.id}`
+        const nextNote = patch.roleNote ?? getRoleNote(item)
+        const nextStance =
+          typeof patch.roleStance === 'number'
+            ? clampRoleStance(patch.roleStance)
+            : getRoleStance(item)
+        return {
+          ...item,
+          roleName: nextName,
+          roleNote: nextNote,
+          roleStance: nextStance,
+          roleX: typeof patch.roleX === 'number' ? patch.roleX : item.roleX,
+          roleY: typeof patch.roleY === 'number' ? patch.roleY : item.roleY,
+          text: buildRoleMemoryText(nextName, nextNote)
+        }
+      })
+    )
+  }
+
+  function openRoleEditor(item: MemoryItem) {
+    if (item.kind !== 'role') return
+    setRoleEditorDialog({
+      roleId: item.id,
+      roleName: getRoleName(item),
+      roleNote: getRoleNote(item),
+      roleStance: getRoleStance(item)
+    })
+  }
+
+  function closeRoleEditor() {
+    setRoleEditorDialog(null)
+  }
+
+  function commitRoleEditor() {
+    if (!roleEditorDialog) return
+    updateRoleMemory(roleEditorDialog.roleId, {
+      roleName: roleEditorDialog.roleName,
+      roleNote: roleEditorDialog.roleNote,
+      roleStance: roleEditorDialog.roleStance
+    })
+    setRoleEditorDialog(null)
+    setStatus('角色信息已更新')
+  }
+
+  function beginRoleDrag(event: ReactMouseEvent<HTMLElement>, roleId: number) {
+    if (isRoleGraphSpacePressed || isRoleGraphPanning) return
+    event.preventDefault()
+    event.stopPropagation()
+    const pointer = getRoleGraphPointFromClient(event.clientX, event.clientY)
+    if (!pointer) return
+    const nodePosition = visibleRolePositionById.get(roleId)
+    if (!nodePosition) return
+    setDraggingRoleId(roleId)
+    setRoleDragOffset({
+      x: pointer.x - nodePosition.x,
+      y: pointer.y - nodePosition.y
+    })
+  }
+
+  function beginRoleGraphPan(event: ReactMouseEvent<HTMLDivElement>) {
+    if (!isRoleGraphFullscreen) return
+    const isSpaceLeftDrag = isRoleGraphSpacePressed && event.button === 0
+    const isMiddleDrag = event.button === 1
+    if (!isSpaceLeftDrag && !isMiddleDrag) return
+    event.preventDefault()
+    roleGraphPanStartRef.current = {
+      clientX: event.clientX,
+      clientY: event.clientY,
+      originX: roleGraphViewport.x,
+      originY: roleGraphViewport.y
+    }
+    setIsRoleGraphPanning(true)
+    if (draggingRoleId !== null) setDraggingRoleId(null)
+    if (roleLinkStart !== null) {
+      setRoleLinkStart(null)
+      setRoleLinkTarget(null)
+      setRoleLinkPreview(null)
+    }
+  }
+
+  function handleRoleGraphDoubleClick(event: ReactMouseEvent<HTMLDivElement>) {
+    if (!isRoleGraphActive) return
+    if (draggingRoleId !== null || roleLinkStart !== null || isRoleGraphPanning) return
+    const target = event.target
+    if (
+      target instanceof Element &&
+      target.closest(
+        '.role-graph-node, .role-link-handle, .role-graph-edge, .role-graph-corner-fullscreen, .role-graph-exit-button'
+      )
+    ) {
+      return
+    }
+    const pointer = getRoleGraphPointFromClient(event.clientX, event.clientY)
+    if (!pointer) return
+    appendMemoryItem('role', {
+      roleX: pointer.x - ROLE_NODE_WIDTH / 2,
+      roleY: pointer.y - ROLE_NODE_HEIGHT / 2
+    })
+    setStatus('已新增角色节点')
+  }
+
+  function handleRoleGraphWheel(event: ReactWheelEvent<HTMLDivElement>) {
+    if (!isRoleGraphFullscreen) return
+    event.preventDefault()
+    const board = roleGraphBoardRef.current
+    if (!board) return
+    const rect = board.getBoundingClientRect()
+    const anchorX = event.clientX - rect.left
+    const anchorY = event.clientY - rect.top
+    const zoomFactor = event.deltaY < 0 ? ROLE_GRAPH_ZOOM_FACTOR : 1 / ROLE_GRAPH_ZOOM_FACTOR
+    setRoleGraphViewport((previous) => {
+      const nextScale = clampNumber(
+        previous.scale * zoomFactor,
+        ROLE_GRAPH_MIN_SCALE,
+        ROLE_GRAPH_MAX_SCALE
+      )
+      if (nextScale === previous.scale) return previous
+      const graphX = (anchorX - previous.x) / previous.scale
+      const graphY = (anchorY - previous.y) / previous.scale
+      return {
+        scale: nextScale,
+        x: anchorX - graphX * nextScale,
+        y: anchorY - graphY * nextScale
+      }
+    })
+  }
+
+  async function toggleRoleGraphFullscreen() {
+    const board = roleGraphBoardRef.current
+    if (!board) return
+    if (document.fullscreenElement === board) {
+      await document.exitFullscreen().catch(() => {})
+      return
+    }
+    if (document.fullscreenElement) {
+      await document.exitFullscreen().catch(() => {})
+    }
+    await board.requestFullscreen().catch(() => {})
+  }
+
+  function beginRoleLink(
+    event: ReactMouseEvent<HTMLButtonElement>,
+    roleId: number,
+    corner: RoleLinkCorner
+  ) {
+    if (isRoleGraphSpacePressed || isRoleGraphPanning) return
+    event.preventDefault()
+    event.stopPropagation()
+    const pointer = getRoleGraphPointFromClient(event.clientX, event.clientY)
+    if (!pointer) return
+    setRoleRelationMenu({ open: false, x: 0, y: 0, relationId: null })
+    const nextTarget = getRoleLinkTargetByPoint(pointer, roleId)
+    setRoleLinkStart({ roleId, corner })
+    setRoleLinkTarget(nextTarget)
+    if (nextTarget) {
+      const nextPosition = visibleRolePositionById.get(nextTarget.roleId)
+      if (nextPosition) {
+        setRoleLinkPreview(getRoleSidePoint(nextPosition, nextTarget.side))
+        return
+      }
+    }
+    setRoleLinkPreview(pointer)
+  }
+
+  function updateOrCreateRoleRelation(
+    fromId: number,
+    toId: number,
+    fromAnchor: RoleLinkCorner,
+    toAnchor: RoleLinkSide
+  ) {
+    if (fromId === toId) return
+    const pairA = Math.min(fromId, toId)
+    const pairB = Math.max(fromId, toId)
+    setRoleRelations((previous) => {
+      const index = previous.findIndex((relation) => {
+        const a = Math.min(relation.fromMemoryId, relation.toMemoryId)
+        const b = Math.max(relation.fromMemoryId, relation.toMemoryId)
+        return a === pairA && b === pairB
+      })
+      if (index >= 0) {
+        return previous.map((relation, relationIndex) =>
+          relationIndex === index
+            ? {
+                ...relation,
+                fromMemoryId: fromId,
+                toMemoryId: toId,
+                fromAnchor,
+                toAnchor
+              }
+            : relation
+        )
+      }
+      return [
+        ...previous,
+        {
+          id: Date.now(),
+          fromMemoryId: fromId,
+          toMemoryId: toId,
+          fromAnchor,
+          toAnchor,
+          relation: '',
+          createdAt: nowLabel()
+        }
+      ]
+    })
+  }
+
+  function openRoleRelationContextMenu(event: ReactMouseEvent<SVGElement>, relationId: number) {
+    event.preventDefault()
+    event.stopPropagation()
+    setRoleRelationMenu({
+      open: true,
+      x: event.clientX,
+      y: event.clientY,
+      relationId
+    })
+  }
+
+  function editRoleRelation(relationId: number) {
+    const current = roleRelations.find((item) => item.id === relationId)
+    if (!current) return
+    const fromName = roleNameById.get(current.fromMemoryId) || `角色${current.fromMemoryId}`
+    const toName = roleNameById.get(current.toMemoryId) || `角色${current.toMemoryId}`
+    const next = window.prompt(`请输入角色关系（${fromName} ↔ ${toName}）`, current.relation || '')
+    if (next === null) return
+    setRoleRelations((previous) =>
+      previous.map((item) =>
+        item.id === relationId
+          ? {
+              ...item,
+              relation: next.trim()
+            }
+          : item
+      )
+    )
+    setRoleRelationMenu({ open: false, x: 0, y: 0, relationId: null })
+    setStatus('角色关系已更新')
+  }
+
+  function removeRoleRelation(relationId: number) {
+    setRoleRelations((previous) => previous.filter((item) => item.id !== relationId))
+    setRoleRelationMenu({ open: false, x: 0, y: 0, relationId: null })
+  }
+
+  function handleRoleGraphMouseMove(event: ReactMouseEvent<HTMLDivElement>) {
+    if (isRoleGraphPanning) {
+      const start = roleGraphPanStartRef.current
+      if (!start) return
+      setRoleGraphViewport((previous) => ({
+        ...previous,
+        x: start.originX + (event.clientX - start.clientX),
+        y: start.originY + (event.clientY - start.clientY)
+      }))
+      return
+    }
+    const pointer = getRoleGraphPointFromClient(event.clientX, event.clientY)
+    if (!pointer) return
+    if (roleLinkStart !== null) {
+      const nextTarget = getRoleLinkTargetByPoint(pointer, roleLinkStart.roleId)
+      setRoleLinkTarget(nextTarget)
+      if (nextTarget) {
+        const nextPosition = visibleRolePositionById.get(nextTarget.roleId)
+        if (nextPosition) {
+          setRoleLinkPreview(getRoleSidePoint(nextPosition, nextTarget.side))
+        } else {
+          setRoleLinkPreview(pointer)
+        }
+      } else {
+        setRoleLinkPreview(pointer)
+      }
+    }
+    if (draggingRoleId === null) return
+    const nextX = Math.max(0, pointer.x - roleDragOffset.x)
+    const nextY = Math.max(0, pointer.y - roleDragOffset.y)
+    updateRoleMemory(draggingRoleId, { roleX: nextX, roleY: nextY })
+  }
+
+  function handleRoleGraphMouseUp(event: ReactMouseEvent<HTMLDivElement>) {
+    const wasPanning = isRoleGraphPanning
+    if (isRoleGraphPanning) {
+      setIsRoleGraphPanning(false)
+      roleGraphPanStartRef.current = null
+    }
+    if (wasPanning) return
+    if (draggingRoleId !== null) {
+      setDraggingRoleId(null)
+    }
+    if (roleLinkStart === null) return
+    const pointer = getRoleGraphPointFromClient(event.clientX, event.clientY)
+    const finalTarget =
+      pointer !== null ? getRoleLinkTargetByPoint(pointer, roleLinkStart.roleId) : null
+    if (finalTarget && finalTarget.roleId !== roleLinkStart.roleId) {
+      updateOrCreateRoleRelation(
+        roleLinkStart.roleId,
+        finalTarget.roleId,
+        roleLinkStart.corner,
+        finalTarget.side
+      )
+    }
+    setRoleLinkStart(null)
+    setRoleLinkTarget(null)
+    setRoleLinkPreview(null)
   }
 
   function jumpToMemory(memoryItem: MemoryItem) {
@@ -2886,9 +4089,29 @@ function App() {
   async function askModel(instruction: string, input: string) {
     const provider = config.kind
     const baseUrl = normalizeBaseUrl(config.baseUrl, provider)
-    const memoryItems = memory.map((item) =>
-      item.kind === 'role' ? `角色：${item.text}` : item.text
-    )
+    const infoMemoryItems = memory
+      .filter((item) => item.kind === 'info')
+      .map((item) => item.text.trim())
+      .filter(Boolean)
+    const roleMemoryItems = memory
+      .filter((item) => item.kind === 'role')
+      .map((item) => {
+        const roleName = getRoleName(item)
+        const roleNote = getRoleNote(item).trim()
+        const stance = getRoleStance(item)
+        const stanceLabel = getRoleStanceLabel(stance)
+        return `角色：${roleName}（立场 ${stance}/10，${stanceLabel}）${roleNote ? `；备注：${roleNote}` : ''}`
+      })
+      .filter(Boolean)
+    const relationItems = roleRelations
+      .map((relation) => {
+        const fromName = roleNameById.get(relation.fromMemoryId)
+        const toName = roleNameById.get(relation.toMemoryId)
+        if (!fromName || !toName) return ''
+        return `角色关系：${fromName} ↔ ${toName}${relation.relation.trim() ? `（${relation.relation.trim()}）` : ''}`
+      })
+      .filter(Boolean)
+    const memoryItems = [...infoMemoryItems, ...roleMemoryItems, ...relationItems]
     const sessionId = ensureCurrentSessionId()
 
     if (window.novelDesktopApi?.generate && sessionId) {
@@ -3014,21 +4237,30 @@ function App() {
     }
   }
 
-  async function testConnection() {
+  async function testConnection(options?: { auto?: boolean }) {
+    const isAuto = options?.auto === true
     setIsRunning(true)
     setError('')
     setConnectionState('checking')
-    setStatus('正在测试连接')
-    setActivePanel('result')
+    setStatus(isAuto ? '正在连接当前模型' : '正在测试连接')
+    if (!isAuto) {
+      setActivePanel('result')
+    }
     try {
       const output = await askModel('只回复：OK', '连接测试')
-      setResult(output || 'OK')
+      if (!isAuto) {
+        setResult(output || 'OK')
+      }
       setConnectionState('connected')
       setStatus('连接正常')
     } catch (err) {
-      setError(err instanceof Error ? err.message : '连接失败')
+      const message = err instanceof Error ? err.message : '连接失败'
+      setError(message)
       setConnectionState('failed')
       setStatus('连接失败')
+      if (isAuto) {
+        window.alert(`模型自动连接失败：${message}`)
+      }
     } finally {
       setIsRunning(false)
     }
@@ -3303,15 +4535,12 @@ ${message}`
               >
                 {t('← 返回项目', '← Back To Projects')}
               </button>
-              <div>
-                <strong>{t('设置', 'Settings')}</strong>
-                <p>{t('管理语言与项目文件保存位置。', 'Manage language and project storage path.')}</p>
-              </div>
+              <strong>{t('设置', 'Settings')}</strong>
             </header>
 
             {hasDesktopProjectStorage ? (
               <div className="project-settings-panel">
-                <label>
+                <label className="project-settings-field">
                   <span>{t('软件语言', 'Language')}</span>
                   <select
                     value={appLanguage}
@@ -3321,7 +4550,7 @@ ${message}`
                     <option value="en-US">English</option>
                   </select>
                 </label>
-                <label>
+                <label className="project-settings-field is-full">
                   <span>{t('项目文件保存位置', 'Project Storage Directory')}</span>
                   <div className="project-storage-row">
                     <input
@@ -3347,14 +4576,51 @@ ${message}`
                     </button>
                   </div>
                 </label>
-                <p className="panel-note-tip project-settings-note">
+                <div className="project-settings-field">
+                  <span>{t('软件升级', 'Software Upgrade')}</span>
+                  <p className="project-settings-version">{appVersionLabel}</p>
+                  <p className="panel-note-tip project-settings-note-inline">
+                    {t(
+                      '当前版本说明：v 1.1 bate（内测版本）。',
+                      'Current version note: v 1.1 bate (beta).'
+                    )}
+                  </p>
+                  <button
+                    className="text-button project-upgrade-button"
+                    disabled={isCheckingAppUpgrade}
+                    onClick={() => void checkAppUpgrade()}
+                    type="button"
+                  >
+                    {isCheckingAppUpgrade ? t('检查中...', 'Checking...') : t('软件升级', 'Check Upgrade')}
+                  </button>
+                </div>
+                <div className="project-settings-field">
+                  <span>{t('启动选项', 'Startup Options')}</span>
+                  <label className="project-settings-switch">
+                    <input
+                      checked={autoUpdateEnabled}
+                      onChange={(event) => setAutoUpdateEnabled(event.target.checked)}
+                      type="checkbox"
+                    />
+                    <span>{t('自动升级（默认开启）', 'Auto upgrade (enabled by default)')}</span>
+                  </label>
+                  <label className="project-settings-switch">
+                    <input
+                      checked={autoLaunchEnabled}
+                      onChange={(event) => setAutoLaunchEnabled(event.target.checked)}
+                      type="checkbox"
+                    />
+                    <span>{t('软件随系统启动（默认开启）', 'Launch on system startup (enabled by default)')}</span>
+                  </label>
+                </div>
+                <p className="panel-note-tip project-settings-note project-settings-field is-full">
                   {t(
                     '修改保存位置后，会将当前所有项目文件包迁移到新目录。',
                     'After changing the location, all existing project packages will be moved to the new directory.'
                   )}
                 </p>
                 <button
-                  className="primary-button"
+                  className="primary-button project-settings-save project-settings-field is-full"
                   disabled={isApplyingProjectSettings}
                   onClick={() => void applyProjectSettings()}
                 >
@@ -3416,7 +4682,9 @@ ${message}`
                   </div>
                   <div className="project-item-actions">
                     <button
-                      className="text-button"
+                      className={`text-button ${
+                        project.id === activeProjectId ? 'project-resume-button' : ''
+                      }`}
                       onClick={() => {
                         setProjectActionMenuId(null)
                         openProject(project.id)
@@ -3552,8 +4820,8 @@ ${message}`
                   <h3>{t('确认删除项目', 'Confirm Project Deletion')}</h3>
                   <p>
                     {t(
-                      `请输入项目名（文件名）"${pendingDeleteProject.name}" 以彻底删除。`,
-                      `Type project name "${pendingDeleteProject.name}" to permanently delete.`
+                      `为了防止误删，请输入完整项目名“${pendingDeleteProject.name}”确认项目并删除。`,
+                      `To prevent accidental deletion, type the full project name "${pendingDeleteProject.name}" to confirm and delete.`
                     )}
                   </p>
                   <input
@@ -3605,11 +4873,10 @@ ${message}`
                           t('项目名不匹配，请确认后重试。', 'Project name mismatch. Please check and retry.')}
                       </p>
                     )
-                  ) : (
-                    <p className="project-delete-feedback">
-                      {t('请输入完整项目名后才能删除。', 'Type the full project name to enable deletion.')}
-                    </p>
-                  )}
+                  ) : null}
+                  <p className="project-delete-feedback is-error">
+                    {t('删除项目不可恢复，请谨慎操作。', 'Project deletion cannot be undone. Please proceed carefully.')}
+                  </p>
                   <div className="project-delete-modal-actions">
                     <button className="text-button" onClick={cancelDeleteProject}>
                       {t('取消', 'Cancel')}
@@ -3641,9 +4908,12 @@ ${message}`
             <div className="project-home-header-top">
               <div className="project-home-brand">
                 <img className="brand-logo" src={appLogo} alt={APP_DISPLAY_NAME} />
-                <div>
+                <div className="project-home-brand-copy">
                   <strong>{APP_DISPLAY_NAME}</strong>
                   <span>{t('让AI写作更可控', 'Make AI Writing More Controllable')}</span>
+                </div>
+                <div className="project-home-version" aria-label="Software version">
+                  v 1.1 bate
                 </div>
               </div>
               <div className="project-home-header-actions">
@@ -3690,7 +4960,7 @@ ${message}`
                       {dashboardGreeting}
                       <span aria-hidden> 👋</span>
                     </h2>
-                    <p>{t('今天想快乐写作吗。', 'Ready to write something great today?')}</p>
+                    <p>{t('今天也要快乐写作啊~~··', "Let's write happily today too~~··")}</p>
                   </div>
                 </div>
                 <div className="project-quick-cards project-quick-cards-overlay">
@@ -3760,7 +5030,9 @@ ${message}`
                     </div>
                     <div className="project-item-actions">
                       <button
-                        className="text-button"
+                        className={`text-button ${
+                          project.id === activeProjectId ? 'project-resume-button' : ''
+                        }`}
                         onClick={() => {
                           setProjectActionMenuId(null)
                           openProject(project.id)
@@ -3832,6 +5104,16 @@ ${message}`
                 <p className="empty-tip">
                   {t('还没有项目，先在左侧创建一个。', 'No projects yet. Create one from the left panel.')}
                 </p>
+              )}
+              {hasDesktopProjectImport && (
+                <button
+                  className="text-button project-import-button"
+                  disabled={isImportingProjects}
+                  onClick={() => void importProjectsFromDisk()}
+                  type="button"
+                >
+                  {isImportingProjects ? t('导入中...', 'Importing...') : t('⇪ 导入作品', '⇪ Import Project')}
+                </button>
               )}
             </section>
           </div>
@@ -3983,8 +5265,8 @@ ${message}`
                 <h3>{t('确认删除项目', 'Confirm Project Deletion')}</h3>
                 <p>
                   {t(
-                    `请输入项目名（文件名）"${pendingDeleteProject.name}" 以彻底删除。`,
-                    `Type project name "${pendingDeleteProject.name}" to permanently delete.`
+                      `为了防止误删，请输入完整项目名“${pendingDeleteProject.name}”确认项目并删除。`,
+                      `To prevent accidental deletion, type the full project name "${pendingDeleteProject.name}" to confirm and delete.`
                   )}
                 </p>
                 <input
@@ -4036,11 +5318,10 @@ ${message}`
                         t('项目名不匹配，请确认后重试。', 'Project name mismatch. Please check and retry.')}
                     </p>
                   )
-                ) : (
-                  <p className="project-delete-feedback">
-                    {t('请输入完整项目名后才能删除。', 'Type the full project name to enable deletion.')}
-                  </p>
-                )}
+                ) : null}
+                <p className="project-delete-feedback is-error">
+                  {t('删除项目不可恢复，请谨慎操作。', 'Project deletion cannot be undone. Please proceed carefully.')}
+                </p>
                 <div className="project-delete-modal-actions">
                   <button className="text-button" onClick={cancelDeleteProject}>
                     {t('取消', 'Cancel')}
@@ -4502,7 +5783,7 @@ ${message}`
               title="写作小助手"
               type="button"
             >
-              ✨
+              <img alt="写作小助手" src={aiBlotIcon} />
             </button>
 
             {assistantOpen && (
@@ -4627,6 +5908,26 @@ ${message}`
                     角色
                   </button>
                 </div>
+                {memoryModule === 'role' && (
+                  <div className="memory-view-row">
+                    <div className="memory-view-tabs">
+                      <button
+                        className={roleGraphView === 'list' ? 'active' : ''}
+                        type="button"
+                        onClick={() => setRoleGraphView('list')}
+                      >
+                        列表
+                      </button>
+                      <button
+                        className={roleGraphView === 'graph' ? 'active' : ''}
+                        type="button"
+                        onClick={() => setRoleGraphView('graph')}
+                      >
+                        脑图
+                      </button>
+                    </div>
+                  </div>
+                )}
                 <div className="memory-search-row">
                   <button
                     className="text-button"
@@ -4651,51 +5952,247 @@ ${message}`
                     }
                   />
                 </div>
-                <ul className="memory-list">
-                  {filteredMemory.map((item, index) => (
-                    <li key={item.id} onClick={() => jumpToMemory(item)}>
-                      <span>{index + 1}</span>
-                      <div className="memory-content">
+                {memoryModule === 'role' && roleGraphView === 'graph' ? (
+                  <div
+                    className={`role-graph-board${isRoleGraphSpacePressed ? ' is-space' : ''}${isRoleGraphPanning ? ' is-panning' : ''}`}
+                    onMouseDown={beginRoleGraphPan}
+                    onMouseMove={handleRoleGraphMouseMove}
+                onMouseUp={handleRoleGraphMouseUp}
+                onDoubleClick={handleRoleGraphDoubleClick}
+                onWheel={handleRoleGraphWheel}
+                onAuxClick={(event) => {
+                  if (event.button === 1) event.preventDefault()
+                }}
+                ref={roleGraphBoardRef}
+                style={roleGraphBoardStyle}
+              >
+                    {isRoleGraphFullscreen && (
+                      <button
+                        className="text-button role-graph-exit-button"
+                        onClick={() => void toggleRoleGraphFullscreen()}
+                        type="button"
+                      >
+                        退出全屏
+                      </button>
+                    )}
+                    <div className="role-graph-viewport" style={roleGraphViewportStyle}>
+                      <svg className="role-graph-lines" width="100%" height="100%">
+                        {visibleRoleRelations.map((relation) => {
+                          const fromPos = visibleRolePositionById.get(relation.fromMemoryId)
+                          const toPos = visibleRolePositionById.get(relation.toMemoryId)
+                          if (!fromPos || !toPos) return null
+                          const fromAnchor =
+                            relation.fromAnchor ?? pickDefaultRoleCorner(fromPos, toPos)
+                          const toAnchor = relation.toAnchor ?? pickDefaultRoleSide(fromPos, toPos)
+                          const fromPoint = getRoleCornerPoint(fromPos, fromAnchor)
+                          const toPoint = getRoleSidePoint(toPos, toAnchor)
+                          const x1 = fromPoint.x
+                          const y1 = fromPoint.y
+                          const x2 = toPoint.x
+                          const y2 = toPoint.y
+                          const midX = (x1 + x2) / 2
+                          const midY = (y1 + y2) / 2
+                          return (
+                            <g key={relation.id} className="role-graph-edge">
+                              <line
+                                x1={x1}
+                                y1={y1}
+                                x2={x2}
+                                y2={y2}
+                                onDoubleClick={() => editRoleRelation(relation.id)}
+                                onContextMenu={(event) =>
+                                  openRoleRelationContextMenu(event, relation.id)
+                                }
+                              />
+                              <text
+                                x={midX}
+                                y={midY - 6}
+                                onDoubleClick={() => editRoleRelation(relation.id)}
+                                onContextMenu={(event) => openRoleRelationContextMenu(event, relation.id)}
+                              >
+                                {relation.relation || '双击输入关系'}
+                              </text>
+                            </g>
+                          )
+                        })}
+                        {roleLinkStart !== null && roleLinkPreview ? (
+                          (() => {
+                            const startPos = visibleRolePositionById.get(roleLinkStart.roleId)
+                            if (!startPos) return null
+                            const startPoint = getRoleCornerPoint(startPos, roleLinkStart.corner)
+                            return (
+                              <line
+                                className="role-graph-preview-line"
+                                x1={startPoint.x}
+                                y1={startPoint.y}
+                                x2={roleLinkPreview.x}
+                                y2={roleLinkPreview.y}
+                              />
+                            )
+                          })()
+                        ) : null}
+                      </svg>
+                      {visibleRoleMemory.map((item, index) => {
+                        const position = visibleRolePositionById.get(item.id) ?? getRoleNodePosition(item, index)
+                        const roleName = getRoleName(item)
+                        const roleNote = getRoleNote(item)
+                        const roleStance = getRoleStance(item)
+                        const showHandles =
+                          hoveredRoleId === item.id || roleLinkStart?.roleId === item.id
+                        const linkTargetForNode =
+                          roleLinkStart !== null && roleLinkTarget?.roleId === item.id
+                            ? roleLinkTarget
+                            : null
+                        return (
+                          <article
+                            className={`role-graph-node ${draggingRoleId === item.id ? 'dragging' : ''}${showHandles ? ' show-handles' : ''}`}
+                            data-role-id={item.id}
+                            key={item.id}
+                            onMouseDown={(event) => beginRoleDrag(event, item.id)}
+                            onDoubleClick={(event) => {
+                              event.preventDefault()
+                              event.stopPropagation()
+                              openRoleEditor(item)
+                            }}
+                            onMouseEnter={() => setHoveredRoleId(item.id)}
+                            onMouseLeave={() =>
+                              setHoveredRoleId((previous) => (previous === item.id ? null : previous))
+                            }
+                            style={{ left: position.x, top: position.y }}
+                          >
+                            {ROLE_LINK_CORNERS.map((corner) => (
+                              <button
+                                className={`role-link-handle corner-${corner}`}
+                                key={corner}
+                                onMouseDown={(event) => beginRoleLink(event, item.id, corner)}
+                                title="拖动到另一个角色建立关系"
+                                type="button"
+                              >
+                                ●
+                              </button>
+                            ))}
+                            {linkTargetForNode && (
+                              <span
+                                className={`role-link-target-indicator side-${linkTargetForNode.side}`}
+                              >
+                                ●
+                              </span>
+                            )}
+                            <h4
+                              onDoubleClick={() => openRoleEditor(item)}
+                              title="双击编辑角色信息"
+                            >
+                              {roleName}
+                            </h4>
+                            <p>{roleNote || '双击名称编辑名称、备注与立场'}</p>
+                            <small>{`立场 ${roleStance}/10 · ${getRoleStanceLabel(roleStance)}`}</small>
+                          </article>
+                        )
+                      })}
+                    </div>
+                    <button
+                      className="role-graph-corner-fullscreen"
+                      onClick={() => void toggleRoleGraphFullscreen()}
+                      title={isRoleGraphFullscreen ? '退出全屏' : '全屏'}
+                      type="button"
+                    >
+                      {isRoleGraphFullscreen ? '⤡' : '⛶'}
+                    </button>
+                    {roleRelationMenu.open && roleRelationMenu.relationId !== null && (
+                      <div
+                        className="editor-context-menu role-relation-menu"
+                        ref={roleRelationMenuRef}
+                        style={{ left: roleRelationMenu.x, top: roleRelationMenu.y }}
+                      >
                         <button
-                          className="memory-jump"
+                          className="editor-context-item"
+                          onClick={() => editRoleRelation(roleRelationMenu.relationId as number)}
+                          type="button"
+                        >
+                          重命名
+                        </button>
+                        <button
+                          className="editor-context-item"
+                          onClick={() => removeRoleRelation(roleRelationMenu.relationId as number)}
+                          type="button"
+                        >
+                          删除
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <ul className="memory-list">
+                    {filteredMemory.map((item, index) => (
+                      <li key={item.id} onClick={() => jumpToMemory(item)}>
+                        <span>{index + 1}</span>
+                        <div className="memory-content">
+                          {memoryModule === 'role' ? (
+                            <div className="role-memory-card" onClick={(event) => event.stopPropagation()}>
+                              <strong
+                                className="role-memory-card-name"
+                                onDoubleClick={() => openRoleEditor(item)}
+                                title="双击编辑角色信息"
+                              >
+                                {getRoleName(item)}
+                              </strong>
+                              <button
+                                className="memory-jump role-memory-first-appearance"
+                                onClick={(event) => {
+                                  event.preventDefault()
+                                  event.stopPropagation()
+                                  jumpToMemory(item)
+                                }}
+                              >
+                                {item.chapterTitle} / {item.versionTitle}
+                                <em>首次出现</em>
+                              </button>
+                            </div>
+                          ) : (
+                            <>
+                              <button
+                                className="memory-jump"
+                                onClick={(event) => {
+                                  event.preventDefault()
+                                  event.stopPropagation()
+                                  jumpToMemory(item)
+                                }}
+                              >
+                                {item.chapterTitle} / {item.versionTitle}
+                                <em>信息</em>
+                              </button>
+                              <textarea
+                                value={item.text}
+                                onClick={(event) => event.stopPropagation()}
+                                onChange={(event) => {
+                                  setMemory((previous) =>
+                                    previous.map((memoryItem) =>
+                                      memoryItem.id === item.id
+                                        ? { ...memoryItem, text: event.target.value }
+                                        : memoryItem
+                                    )
+                                  )
+                                }}
+                              />
+                            </>
+                          )}
+                        </div>
+                        <button
+                          className="memory-delete"
                           onClick={(event) => {
                             event.preventDefault()
                             event.stopPropagation()
-                            jumpToMemory(item)
-                          }}
-                        >
-                          {item.chapterTitle} / {item.versionTitle}
-                          <em>{item.kind === 'role' ? '角色' : '信息'}</em>
-                        </button>
-                        <textarea
-                          value={item.text}
-                          onClick={(event) => event.stopPropagation()}
-                          onChange={(event) => {
                             setMemory((previous) =>
-                              previous.map((memoryItem) =>
-                                memoryItem.id === item.id
-                                  ? { ...memoryItem, text: event.target.value }
-                                  : memoryItem
-                              )
+                              previous.filter((memoryItem) => memoryItem.id !== item.id)
                             )
                           }}
-                        />
-                      </div>
-                      <button
-                        className="memory-delete"
-                        onClick={(event) => {
-                          event.preventDefault()
-                          event.stopPropagation()
-                          setMemory((previous) =>
-                            previous.filter((memoryItem) => memoryItem.id !== item.id)
-                          )
-                        }}
-                      >
-                        x
-                      </button>
-                    </li>
-                  ))}
-                </ul>
+                        >
+                          x
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
                 {!filteredMemory.length && (
                   <p className="empty-tip">
                     {memorySearchQuery.trim()
@@ -4709,34 +6206,84 @@ ${message}`
                 )}
                 <button
                   className="text-button"
-                  onClick={() => {
-                    const chapter = activeChapter ?? chapters[0]
-                    const version =
-                      activeVersion ??
-                      chapter?.versions.find((item) => item.id === chapter.activeVersionId) ??
-                      chapter?.versions[0]
-                    if (!chapter || !version) return
-                    setMemory((previous) => {
-                      const nextId =
-                        previous.reduce((max, item) => Math.max(max, item.id), 0) + 1
-                      return [
-                        ...previous,
-                        {
-                          id: nextId,
-                          kind: memoryModule,
-                          text: memoryModule === 'role' ? '新角色' : '新记忆：',
-                          chapterId: chapter.id,
-                          chapterTitle: chapter.title,
-                          versionId: version.id,
-                          versionTitle: version.title,
-                          createdAt: nowLabel()
-                        }
-                      ]
-                    })
-                  }}
+                  onClick={() => appendMemoryItem(memoryModule)}
                 >
                   {memoryModule === 'role' ? '新增角色' : '新增记忆'}
                 </button>
+                {roleEditorDialog && (
+                  <div
+                    className="role-editor-modal-backdrop"
+                    onMouseDown={(event) => {
+                      if (event.target === event.currentTarget) closeRoleEditor()
+                    }}
+                  >
+                    <div className="role-editor-modal" onMouseDown={(event) => event.stopPropagation()}>
+                      <h3>编辑角色</h3>
+                      <label>
+                        <span>名称</span>
+                        <input
+                          autoFocus
+                          type="text"
+                          value={roleEditorDialog.roleName}
+                          onChange={(event) =>
+                            setRoleEditorDialog((previous) =>
+                              previous
+                                ? {
+                                    ...previous,
+                                    roleName: event.target.value
+                                  }
+                                : previous
+                            )
+                          }
+                        />
+                      </label>
+                      <label>
+                        <span>备注</span>
+                        <textarea
+                          value={roleEditorDialog.roleNote}
+                          onChange={(event) =>
+                            setRoleEditorDialog((previous) =>
+                              previous
+                                ? {
+                                    ...previous,
+                                    roleNote: event.target.value
+                                  }
+                                : previous
+                            )
+                          }
+                        />
+                      </label>
+                      <label>
+                        <span>{`立场 ${roleEditorDialog.roleStance}/10（${getRoleStanceLabel(roleEditorDialog.roleStance)}）`}</span>
+                        <input
+                          type="range"
+                          min={1}
+                          max={10}
+                          step={1}
+                          value={roleEditorDialog.roleStance}
+                          onChange={(event) =>
+                            setRoleEditorDialog((previous) =>
+                              previous
+                                ? {
+                                    ...previous,
+                                    roleStance: Number(event.target.value)
+                                  }
+                                : previous
+                            )
+                          }
+                        />
+                      </label>
+                      <div className="role-editor-actions">
+                        <button className="text-button" type="button" onClick={closeRoleEditor}>
+                          取消
+                        </button>
+                        <button className="primary-button" type="button" onClick={commitRoleEditor}>
+                          保存
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </section>
             )}
 
@@ -4939,10 +6486,10 @@ ${message}`
                 <div className="settings-connection-row">
                   <button
                     className="text-button"
-                    disabled={isRunning}
+                    disabled={isConnecting}
                     onClick={() => void testConnection()}
                   >
-                    测试连接
+                    {connectionActionLabel}
                   </button>
                   <div className={`settings-connection-state ${connectionStatusClass}`}>
                     <span className="settings-connection-dot" />
@@ -5230,7 +6777,7 @@ ${message}`
                   onChange={(event) => setResult(event.target.value)}
                   placeholder="输出会显示在这里。"
                 />
-                <div className="result-actions">
+                <div className="result-actions result-actions-main">
                   <button onClick={insertResult} disabled={!result}>
                     插入到光标处
                   </button>

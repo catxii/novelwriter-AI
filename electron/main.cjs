@@ -10,6 +10,7 @@ const MARKDOWN_EXTENSIONS = new Set(['.md', '.markdown'])
 const OFFICIAL_SKILLS_DIR = 'E:\\novelwriter\\skills'
 const DEFAULT_LANGUAGE = 'zh-CN'
 const PROJECTS_DIR_BASENAME = 'NovelWriter Projects'
+const APP_VERSION_LABEL = 'v 1.1 bate'
 const APP_DISPLAY_NAME = '超级兔子AI写作'
 const APP_ICON_PATH = path.join(__dirname, '..', 'icon', 'logo.png')
 
@@ -19,7 +20,12 @@ let sessionStore = { sessions: {} }
 let skillsStorePath = ''
 let skillsStore = { installedOfficial: [], installedCustom: [], customSkills: [] }
 let appSettingsPath = ''
-let appSettings = { language: DEFAULT_LANGUAGE, projectsDir: '' }
+let appSettings = {
+  language: DEFAULT_LANGUAGE,
+  projectsDir: '',
+  autoUpdate: true,
+  autoLaunch: true,
+}
 
 function getDefaultProjectsDir() {
   return path.join(app.getPath('documents'), PROJECTS_DIR_BASENAME)
@@ -40,7 +46,9 @@ function normalizeProjectsDir(targetDir) {
 function normalizeAppSettings(raw) {
   const language = raw?.language === 'en-US' ? 'en-US' : DEFAULT_LANGUAGE
   const projectsDir = normalizeProjectsDir(raw?.projectsDir)
-  return { language, projectsDir }
+  const autoUpdate = typeof raw?.autoUpdate === 'boolean' ? raw.autoUpdate : true
+  const autoLaunch = typeof raw?.autoLaunch === 'boolean' ? raw.autoLaunch : true
+  return { language, projectsDir, autoUpdate, autoLaunch }
 }
 
 function isSamePath(a, b) {
@@ -67,6 +75,22 @@ function getProjectSettingsPayload() {
   return {
     language: appSettings.language,
     projectsDir: appSettings.projectsDir,
+    autoUpdate: appSettings.autoUpdate,
+    autoLaunch: appSettings.autoLaunch,
+    appVersion: APP_VERSION_LABEL,
+  }
+}
+
+function applyLaunchAtLoginSetting(enabled) {
+  try {
+    const openAtLogin = Boolean(enabled)
+    const options =
+      process.platform === 'win32'
+        ? { openAtLogin, path: process.execPath, args: [] }
+        : { openAtLogin }
+    app.setLoginItemSettings(options)
+  } catch {
+    // ignore unsupported environments
   }
 }
 
@@ -81,6 +105,10 @@ function sanitizeProjectDirName(name) {
     .replace(/\s+/g, ' ')
     .replace(/[. ]+$/g, '')
   return safe || 'project'
+}
+
+function createImportedProjectId() {
+  return `p-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
 
 function projectPackageFilePath(dirPath) {
@@ -796,10 +824,15 @@ async function getProjectSettings() {
 }
 
 async function updateProjectSettings(_event, payload) {
+  const previousAutoLaunch = appSettings.autoLaunch
   const nextLanguage =
     payload?.language === 'en-US' || payload?.language === 'zh-CN'
       ? payload.language
       : appSettings.language
+  const nextAutoUpdate =
+    typeof payload?.autoUpdate === 'boolean' ? payload.autoUpdate : appSettings.autoUpdate
+  const nextAutoLaunch =
+    typeof payload?.autoLaunch === 'boolean' ? payload.autoLaunch : appSettings.autoLaunch
 
   let nextProjectsDir = appSettings.projectsDir
   if (typeof payload?.projectsDir === 'string' && payload.projectsDir.trim()) {
@@ -809,10 +842,25 @@ async function updateProjectSettings(_event, payload) {
   appSettings = normalizeAppSettings({
     language: nextLanguage,
     projectsDir: nextProjectsDir,
+    autoUpdate: nextAutoUpdate,
+    autoLaunch: nextAutoLaunch,
   })
   await fs.mkdir(appSettings.projectsDir, { recursive: true })
   await saveAppSettings()
+  if (previousAutoLaunch !== appSettings.autoLaunch) {
+    applyLaunchAtLoginSetting(appSettings.autoLaunch)
+  }
   return { ok: true, settings: getProjectSettingsPayload() }
+}
+
+async function checkAppUpgrade() {
+  return {
+    ok: true,
+    currentVersion: APP_VERSION_LABEL,
+    latestVersion: APP_VERSION_LABEL,
+    hasUpdate: false,
+    note: '当前已是最新版本。',
+  }
 }
 
 async function pickProjectStorageDir() {
@@ -893,6 +941,121 @@ async function deleteProjectPackage(_event, payload) {
   return { ok: true, path: dirPath }
 }
 
+async function hasProjectPackage(dirPath) {
+  return pathExists(projectPackageFilePath(dirPath))
+}
+
+async function collectImportProjectDirs(filePaths) {
+  const found = new Set()
+  for (const rawPath of filePaths) {
+    const resolved = path.resolve(String(rawPath || '').trim())
+    if (!resolved) continue
+    const stat = await fs.stat(resolved).catch(() => null)
+    if (!stat || !stat.isDirectory()) continue
+
+    if (await hasProjectPackage(resolved)) {
+      found.add(resolved)
+      continue
+    }
+
+    const children = await fs.readdir(resolved, { withFileTypes: true }).catch(() => [])
+    for (const child of children) {
+      if (!child.isDirectory()) continue
+      const childDir = path.join(resolved, child.name)
+      if (await hasProjectPackage(childDir)) {
+        found.add(childDir)
+      }
+    }
+  }
+  return [...found]
+}
+
+async function readImportProjectPackage(sourceDir) {
+  const packagePath = projectPackageFilePath(sourceDir)
+  const raw = await fs.readFile(packagePath, 'utf8')
+  const parsed = JSON.parse(raw)
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error('invalid project package')
+  }
+  const id = String(parsed.id || '').trim() || createImportedProjectId()
+  const name = String(parsed.name || '').trim() || sanitizeProjectDirName(path.basename(sourceDir))
+  const createdAt = String(parsed.createdAt || '').trim() || new Date().toISOString()
+  const updatedAt = String(parsed.updatedAt || '').trim() || new Date().toISOString()
+  const workspace =
+    parsed.workspace && typeof parsed.workspace === 'object' && !Array.isArray(parsed.workspace)
+      ? parsed.workspace
+      : {}
+
+  return { id, name, createdAt, updatedAt, workspace }
+}
+
+async function importProjectPackages() {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: '导入作品',
+    properties: ['openDirectory', 'multiSelections'],
+    defaultPath: appSettings.projectsDir,
+  })
+  if (result.canceled || !result.filePaths?.length) {
+    return { canceled: true, imported: [], importedCount: 0, skippedCount: 0 }
+  }
+
+  await fs.mkdir(appSettings.projectsDir, { recursive: true })
+  const sourceDirs = await collectImportProjectDirs(result.filePaths)
+  const imported = []
+  let skippedCount = 0
+
+  for (const sourceDir of sourceDirs) {
+    try {
+      const payload = await readImportProjectPackage(sourceDir)
+      const targetDir = await resolveProjectPackageDir(payload.id, payload.name)
+      const sourceResolved = path.resolve(sourceDir)
+      const targetResolved = path.resolve(targetDir)
+
+      if (!isSamePath(sourceResolved, targetResolved)) {
+        if (await pathExists(targetResolved)) {
+          await fs.rm(targetResolved, { recursive: true, force: true })
+        }
+        await fs.cp(sourceResolved, targetResolved, { recursive: true, force: true })
+      }
+
+      await fs.mkdir(targetResolved, { recursive: true })
+      const nextUpdatedAt = new Date().toISOString()
+      await fs.writeFile(
+        projectPackageFilePath(targetResolved),
+        JSON.stringify(
+          {
+            id: payload.id,
+            name: payload.name,
+            createdAt: payload.createdAt,
+            updatedAt: nextUpdatedAt,
+            workspace: payload.workspace,
+          },
+          null,
+          2
+        ),
+        'utf8'
+      )
+
+      imported.push({
+        id: payload.id,
+        name: payload.name,
+        createdAt: payload.createdAt,
+        updatedAt: nextUpdatedAt,
+        workspace: payload.workspace,
+      })
+    } catch {
+      skippedCount += 1
+    }
+  }
+
+  return {
+    canceled: false,
+    imported,
+    importedCount: imported.length,
+    skippedCount: skippedCount + Math.max(0, result.filePaths.length - sourceDirs.length),
+  }
+}
+
 function registerIpc() {
   ipcMain.handle('novel:generate', generateWithSession)
   ipcMain.handle('novel:reset-session', async (_event, payload) => {
@@ -917,11 +1080,13 @@ function registerIpc() {
   ipcMain.handle('novel:skills-delete-custom', deleteCustomSkill)
   ipcMain.handle('novel:project-settings-get', getProjectSettings)
   ipcMain.handle('novel:project-settings-update', updateProjectSettings)
+  ipcMain.handle('novel:app-check-upgrade', checkAppUpgrade)
   ipcMain.handle('novel:project-storage-pick-dir', pickProjectStorageDir)
   ipcMain.handle('novel:project-sync-index', syncProjectsIndex)
   ipcMain.handle('novel:project-sync-package', syncProjectPackage)
   ipcMain.handle('novel:project-open-package', openProjectPackage)
   ipcMain.handle('novel:project-delete-package', deleteProjectPackage)
+  ipcMain.handle('novel:project-import-packages', importProjectPackages)
   ipcMain.handle('novel:window-close', () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.close()
@@ -1032,6 +1197,7 @@ app.whenReady().then(async () => {
   await loadSessionStore()
   await loadSkillsStore()
   await loadAppSettings()
+  applyLaunchAtLoginSetting(appSettings.autoLaunch)
   registerIpc()
   createWindow()
 
