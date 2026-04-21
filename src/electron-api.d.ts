@@ -108,6 +108,9 @@ interface NovelDesktopApi {
   minimizeWindow(): Promise<{ ok: boolean; isMaximized: boolean }>
   toggleMaximizeWindow(): Promise<{ ok: boolean; isMaximized: boolean }>
   getWindowMaximizedState(): Promise<{ ok: boolean; isMaximized: boolean }>
+  applyWindowScreenMode(payload: {
+    screen: 'projects' | 'writer'
+  }): Promise<{ ok: boolean; isMaximized: boolean }>
   onWindowMaximizedChange(callback: (isMaximized: boolean) => void): () => void
 }
 

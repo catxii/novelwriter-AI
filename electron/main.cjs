@@ -952,6 +952,36 @@ function registerIpc() {
     }
     return { ok: false, isMaximized: false }
   })
+  ipcMain.handle('novel:window-apply-screen-mode', (_event, payload) => {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      return { ok: false, isMaximized: false }
+    }
+
+    const screen = String(payload?.screen || '')
+    if (screen === 'writer') {
+      if (!mainWindow.isMaximized()) {
+        mainWindow.maximize()
+      }
+      return { ok: true, isMaximized: mainWindow.isMaximized() }
+    }
+
+    if (screen === 'projects') {
+      if (mainWindow.isFullScreen()) {
+        mainWindow.setFullScreen(false)
+      }
+      if (mainWindow.isMaximized()) {
+        mainWindow.unmaximize()
+      }
+      const [width, height] = mainWindow.getSize()
+      if (width !== 1200 || height !== 780) {
+        mainWindow.setSize(1200, 780, true)
+      }
+      mainWindow.center()
+      return { ok: true, isMaximized: mainWindow.isMaximized() }
+    }
+
+    return { ok: false, isMaximized: mainWindow.isMaximized() }
+  })
 }
 
 function createWindow() {

@@ -10,7 +10,7 @@ import totalCharsIcon from '../icon/今日字数.png'
 import streakIcon from '../icon/连续创作.png'
 import worksIcon from '../icon/创作作品.png'
 import todayCharsIcon from '../icon/新闻写作.png'
-import homeBanner from '../banner/banner1.png'
+import homeBannerVideo from '../banner/banner1.mp4'
 import titleBanner from '../banner/title-banner.png'
 import './App.css'
 
@@ -188,6 +188,7 @@ const LEGACY_KEYS = ['novelwriter.workspace.v2', 'novelwriter.workspace.v1']
 const PROJECT_INDEX_KEY = 'novelwriter.projects.v1'
 const PROJECT_DATA_PREFIX = 'novelwriter.project.v1.'
 const LAST_PROJECT_KEY = 'novelwriter.project.last.v1'
+const LAST_SCREEN_KEY = 'novelwriter.screen.last.v1'
 const APP_DISPLAY_NAME = '超级兔子AI写作'
 
 const actions: WriterAction[] = [
@@ -273,7 +274,7 @@ const SPECIAL_PAGE_META: Record<
   prologue: { title: '序章', railLabel: '序' },
   interlude: { title: '幕间', railLabel: '间' },
   afterword: { title: '后记', railLabel: '后' },
-  special: { title: '特殊页', railLabel: '特' },
+  special: { title: '自定义页面', railLabel: '自' },
 }
 
 type LegacyBackupItem = Partial<{
@@ -292,7 +293,7 @@ const SPECIAL_PAGE_OPTIONS: Array<{ type: SpecialPageType; label: string }> = [
   { type: 'prologue', label: '序章' },
   { type: 'interlude', label: '幕间' },
   { type: 'afterword', label: '后记' },
-  { type: 'special', label: '特殊页' },
+  { type: 'special', label: '自定义页面' },
 ]
 
 function normalizeBaseUrl(baseUrl: string, provider: ProviderKind) {
@@ -908,7 +909,9 @@ function App() {
   const [activeProjectId, setActiveProjectId] = useState<string>(
     () => localStorage.getItem(LAST_PROJECT_KEY) ?? ''
   )
-  const [activeScreen, setActiveScreen] = useState<'projects' | 'writer'>('projects')
+  const [activeScreen, setActiveScreen] = useState<'projects' | 'writer'>(() =>
+    localStorage.getItem(LAST_SCREEN_KEY) === 'writer' ? 'writer' : 'projects'
+  )
   const [projectCenterView, setProjectCenterView] = useState<'home' | 'settings' | 'all'>('home')
   const [newProjectName, setNewProjectName] = useState('')
   const [appLanguage, setAppLanguage] = useState<AppLanguage>('zh-CN')
@@ -919,9 +922,13 @@ function App() {
     message: string
   } | null>(null)
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null)
+  const [renamingProjectId, setRenamingProjectId] = useState<string | null>(null)
   const [pendingDeleteProject, setPendingDeleteProject] = useState<ProjectMeta | null>(null)
   const [deleteProjectConfirmName, setDeleteProjectConfirmName] = useState('')
   const [deleteProjectConfirmError, setDeleteProjectConfirmError] = useState('')
+  const [pendingRenameProject, setPendingRenameProject] = useState<ProjectMeta | null>(null)
+  const [renameProjectInputName, setRenameProjectInputName] = useState('')
+  const [renameProjectError, setRenameProjectError] = useState('')
   const [isCreateProjectModalOpen, setIsCreateProjectModalOpen] = useState(false)
   const [projectActionMenuId, setProjectActionMenuId] = useState<string | null>(null)
   const [isWindowMaximized, setIsWindowMaximized] = useState(false)
@@ -986,6 +993,11 @@ function App() {
   const [assistantDialogPos, setAssistantDialogPos] = useState({ x: 24, y: 24 })
   const [assistantDialogDragging, setAssistantDialogDragging] = useState(false)
   const [assistantDialogDragOffset, setAssistantDialogDragOffset] = useState({ x: 0, y: 0 })
+  const [customPageRenameDialog, setCustomPageRenameDialog] = useState<{
+    chapterId: number
+    value: string
+  } | null>(null)
+  const [isWorkspaceBootstrapping, setIsWorkspaceBootstrapping] = useState(true)
 
   const activeProject = useMemo(
     () => projects.find((project) => project.id === activeProjectId) ?? null,
@@ -1033,6 +1045,10 @@ function App() {
   const deleteProjectConfirmInput = deleteProjectConfirmName.trim()
   const isDeleteProjectNameMatch =
     Boolean(deleteProjectExpectedName) && deleteProjectConfirmInput === deleteProjectExpectedName
+  const renameProjectExpectedName = pendingRenameProject?.name.trim() ?? ''
+  const renameProjectInputTrimmed = renameProjectInputName.trim()
+  const isRenameProjectUnchanged =
+    Boolean(renameProjectExpectedName) && renameProjectInputTrimmed === renameProjectExpectedName
   const canDeleteVersion = chapterVersions.length > 1
   const visibleVersionSet = useMemo(() => new Set(visibleVersionIds), [visibleVersionIds])
   const overflowVersionSet = useMemo(() => new Set(overflowVersionIds), [overflowVersionIds])
@@ -1099,6 +1115,10 @@ function App() {
         continue
       }
       const type = chapter.specialType ?? 'special'
+      if (type === 'special') {
+        labelMap.set(chapter.id, chapter.title || SPECIAL_PAGE_META[type].title)
+        continue
+      }
       labelMap.set(chapter.id, SPECIAL_PAGE_META[type].railLabel)
     }
     return labelMap
@@ -1218,6 +1238,9 @@ function App() {
   }
 
   function requestDeleteProject(project: ProjectMeta) {
+    setPendingRenameProject(null)
+    setRenameProjectInputName('')
+    setRenameProjectError('')
     setPendingDeleteProject(project)
     setDeleteProjectConfirmName('')
     setDeleteProjectConfirmError('')
@@ -1227,6 +1250,85 @@ function App() {
     setPendingDeleteProject(null)
     setDeleteProjectConfirmName('')
     setDeleteProjectConfirmError('')
+  }
+
+  function requestRenameProject(project: ProjectMeta) {
+    setPendingDeleteProject(null)
+    setDeleteProjectConfirmName('')
+    setDeleteProjectConfirmError('')
+    setPendingRenameProject(project)
+    setRenameProjectInputName(project.name)
+    setRenameProjectError('')
+  }
+
+  function cancelRenameProject() {
+    setPendingRenameProject(null)
+    setRenameProjectInputName('')
+    setRenameProjectError('')
+  }
+
+  async function confirmRenameProject() {
+    const project = pendingRenameProject
+    if (!project) return
+    const nextName = renameProjectInputName.trim()
+    if (!nextName) {
+      setRenameProjectError(
+        t('项目名称不能为空。', 'Project name cannot be empty.')
+      )
+      setStatus(t('项目名称不能为空', 'Project name cannot be empty'))
+      return
+    }
+
+    if (nextName === project.name.trim()) {
+      cancelRenameProject()
+      return
+    }
+
+    const hasSameName = projects.some(
+      (item) => item.id !== project.id && item.name.trim().toLowerCase() === nextName.toLowerCase()
+    )
+    if (hasSameName) {
+      setRenameProjectError(
+        t('项目名称已存在，请换一个名称。', 'Project name already exists. Please choose another name.')
+      )
+      setStatus(t('项目名称已存在', 'Project name already exists'))
+      return
+    }
+
+    setRenamingProjectId(project.id)
+    try {
+      const updatedAt = nowLabel()
+      const nextProjects = projects.map((item) =>
+        item.id === project.id
+          ? {
+              ...item,
+              name: nextName,
+              updatedAt
+            }
+          : item
+      )
+      setProjects(nextProjects)
+      saveProjectIndex(nextProjects)
+      await syncProjectsIndexToDisk(nextProjects)
+
+      const snapshot =
+        project.id === activeProjectId && activeScreen === 'writer'
+          ? buildWorkspaceSnapshot()
+          : loadProjectWorkspace(project.id)
+      if (snapshot) {
+        await syncProjectPackageToDisk(project.id, nextName, snapshot)
+      }
+
+      setStatus(
+        appLanguage === 'en-US' ? `Project renamed: ${nextName}` : `已重命名项目：${nextName}`
+      )
+      cancelRenameProject()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('重命名项目失败', 'Failed to rename project'))
+      setStatus(t('重命名项目失败', 'Failed to rename project'))
+    } finally {
+      setRenamingProjectId((current) => (current === project.id ? null : current))
+    }
   }
 
   async function confirmDeleteProject() {
@@ -1414,6 +1516,19 @@ function App() {
   }, [])
 
   useEffect(() => {
+    if (activeScreen === 'writer' && activeProjectId) {
+      const snapshot = loadProjectWorkspace(activeProjectId)
+      if (snapshot) {
+        applyWorkspaceSnapshot(snapshot)
+      } else {
+        setActiveScreen('projects')
+        setStatus(t('未找到上次项目数据，已返回项目页', 'Last project data not found. Returned to project page.'))
+      }
+    }
+    setIsWorkspaceBootstrapping(false)
+  }, [])
+
+  useEffect(() => {
     if (!window.novelDesktopApi?.getWindowMaximizedState) return
     let cancelled = false
     void window.novelDesktopApi
@@ -1432,6 +1547,18 @@ function App() {
       off()
     }
   }, [])
+
+  useEffect(() => {
+    if (!window.novelDesktopApi?.applyWindowScreenMode) return
+    void window.novelDesktopApi
+      .applyWindowScreenMode({ screen: activeScreen })
+      .then((response) => {
+        if (response?.ok) {
+          setIsWindowMaximized(Boolean(response.isMaximized))
+        }
+      })
+      .catch(() => {})
+  }, [activeScreen])
 
   useEffect(() => {
     if (!projectSettingsNotice) return
@@ -1488,6 +1615,7 @@ function App() {
   }, [projects.length, legacyWorkspace])
 
   useEffect(() => {
+    if (isWorkspaceBootstrapping) return
     if (activeScreen !== 'writer') return
     if (!activeProjectId) return
     const snapshot = buildWorkspaceSnapshot()
@@ -1510,8 +1638,19 @@ function App() {
     skillsPrompt,
     sessionMap,
     skillModelName,
-    activeScreen
+    activeScreen,
+    isWorkspaceBootstrapping
   ])
+
+  useEffect(() => {
+    localStorage.setItem(LAST_SCREEN_KEY, activeScreen)
+  }, [activeScreen])
+
+  useEffect(() => {
+    if (activeScreen !== 'writer') return
+    if (activeProjectId) return
+    setActiveScreen('projects')
+  }, [activeScreen, activeProjectId])
 
   useEffect(() => {
     if (!activeProjectId) return
@@ -1721,11 +1860,7 @@ function App() {
     window.novelDesktopApi?.getProjectSettings && window.novelDesktopApi?.openProjectPackage
   )
   const hasDesktopWindowClose = Boolean(window.novelDesktopApi?.closeWindow)
-  const hasDesktopWindowControls = Boolean(
-    window.novelDesktopApi?.minimizeWindow &&
-      window.novelDesktopApi?.toggleMaximizeWindow &&
-      window.novelDesktopApi?.closeWindow
-  )
+  const hasDesktopWindowControls = Boolean(window.novelDesktopApi?.isDesktop)
   const dashboardGreeting =
     appLanguage === 'en-US'
       ? new Date().getHours() < 6
@@ -2354,6 +2489,69 @@ function App() {
     clearSelectionState()
     clearVersionRenameState()
     setStatus(`已切换到 ${chapter.title}`)
+  }
+
+  function renameCustomPage(chapterId: number) {
+    const chapter = chapters.find((item) => item.id === chapterId)
+    if (!chapter || chapter.kind !== 'special') return
+    if ((chapter.specialType ?? 'special') !== 'special') return
+    setCustomPageRenameDialog({
+      chapterId,
+      value: chapter.title
+    })
+  }
+
+  function cancelCustomPageRename() {
+    setCustomPageRenameDialog(null)
+  }
+
+  function commitCustomPageRename() {
+    if (!customPageRenameDialog) return
+    const { chapterId, value } = customPageRenameDialog
+    const chapter = chapters.find((item) => item.id === chapterId)
+    if (!chapter || chapter.kind !== 'special') {
+      setCustomPageRenameDialog(null)
+      return
+    }
+    if ((chapter.specialType ?? 'special') !== 'special') {
+      setCustomPageRenameDialog(null)
+      return
+    }
+
+    const trimmedTitle = value.trim()
+    if (!trimmedTitle) {
+      setStatus(t('页面名称不能为空', 'Page name cannot be empty'))
+      return
+    }
+    if (trimmedTitle === chapter.title) {
+      setCustomPageRenameDialog(null)
+      return
+    }
+
+    setChapters((previous) =>
+      withOrderedChapterTitles(
+        previous.map((item) =>
+          item.id === chapterId
+            ? {
+                ...item,
+                title: trimmedTitle
+              }
+            : item
+        )
+      )
+    )
+    setMemory((previous) =>
+      previous.map((item) =>
+        item.chapterId === chapter.id
+          ? {
+              ...item,
+              chapterTitle: trimmedTitle
+            }
+          : item
+      )
+    )
+    setCustomPageRenameDialog(null)
+    setStatus(`已重命名为 ${trimmedTitle}`)
   }
 
   function deleteChapter(chapterId: number) {
@@ -3191,10 +3389,6 @@ ${message}`
         <main className="project-shell">
           <section className="project-home project-all-projects-page">
             <header className="project-all-header">
-              <div>
-                <strong>{t('全部项目', 'All Projects')}</strong>
-                <p>{t(`共 ${projects.length} 个项目`, `${projects.length} projects`)}</p>
-              </div>
               <button
                 className="text-button project-all-back"
                 onClick={() => setProjectCenterView('home')}
@@ -3202,6 +3396,10 @@ ${message}`
               >
                 {t('← 返回首页', '← Back To Home')}
               </button>
+              <div className="project-all-title">
+                <strong>{t('全部项目', 'All Projects')}</strong>
+                <p>{t(`共 ${projects.length} 个项目`, `${projects.length} projects`)}</p>
+              </div>
             </header>
 
             <ul className="project-recent-list project-recent-list-all">
@@ -3244,6 +3442,19 @@ ${message}`
                         <div className="project-item-menu-dropdown" role="menu">
                           <button
                             className="text-button"
+                            disabled={renamingProjectId === project.id}
+                            onClick={() => {
+                              setProjectActionMenuId(null)
+                              requestRenameProject(project)
+                            }}
+                            type="button"
+                          >
+                            {renamingProjectId === project.id
+                              ? t('重命名中...', 'Renaming...')
+                              : t('重命名', 'Rename')}
+                          </button>
+                          <button
+                            className="text-button"
                             disabled={!hasDesktopProjectStorage}
                             onClick={() => {
                               setProjectActionMenuId(null)
@@ -3276,6 +3487,58 @@ ${message}`
 
             {!projects.length && (
               <p className="empty-tip">{t('还没有项目，先创建一个新项目。', 'No projects yet. Create one to start.')}</p>
+            )}
+
+            {pendingRenameProject && (
+              <div
+                className="project-create-modal-backdrop"
+                onMouseDown={(event) => {
+                  if (event.target === event.currentTarget) cancelRenameProject()
+                }}
+              >
+                <div className="project-create-modal" onMouseDown={(event) => event.stopPropagation()}>
+                  <h3>{t('重命名项目', 'Rename Project')}</h3>
+                  <p>{t('请输入新的项目名称。', 'Please enter a new project name.')}</p>
+                  <input
+                    autoFocus
+                    value={renameProjectInputName}
+                    onChange={(event) => {
+                      setRenameProjectInputName(event.target.value)
+                      if (renameProjectError) setRenameProjectError('')
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault()
+                        void confirmRenameProject()
+                      }
+                      if (event.key === 'Escape') {
+                        event.preventDefault()
+                        cancelRenameProject()
+                      }
+                    }}
+                    placeholder={t('输入新项目名', 'Enter new project name')}
+                  />
+                  {renameProjectError ? (
+                    <p className="project-delete-feedback is-error">{renameProjectError}</p>
+                  ) : isRenameProjectUnchanged ? (
+                    <p className="project-delete-feedback">{t('名称未变化。', 'Name is unchanged.')}</p>
+                  ) : null}
+                  <div className="project-create-modal-actions">
+                    <button className="text-button" onClick={cancelRenameProject}>
+                      {t('取消', 'Cancel')}
+                    </button>
+                    <button
+                      className="primary-button"
+                      disabled={!renameProjectInputTrimmed || renamingProjectId === pendingRenameProject.id}
+                      onClick={() => void confirmRenameProject()}
+                    >
+                      {renamingProjectId === pendingRenameProject.id
+                        ? t('保存中...', 'Saving...')
+                        : t('保存名称', 'Save Name')}
+                    </button>
+                  </div>
+                </div>
+              </div>
             )}
 
             {pendingDeleteProject && (
@@ -3380,7 +3643,7 @@ ${message}`
                 <img className="brand-logo" src={appLogo} alt={APP_DISPLAY_NAME} />
                 <div>
                   <strong>{APP_DISPLAY_NAME}</strong>
-                  <span>{t('本地项目中心', 'Local Project Hub')}</span>
+                  <span>{t('让AI写作更可控', 'Make AI Writing More Controllable')}</span>
                 </div>
               </div>
               <div className="project-home-header-actions">
@@ -3406,65 +3669,69 @@ ${message}`
                 )}
               </div>
             </div>
-            <p>
-              {t(
-                '所有项目均保存在本地。每个项目会独立保存章节、版本、记忆、参考、Skills 和模型设置，可随时新建或继续续写。',
-                'All projects are stored locally. Each project keeps chapters, versions, memory, references, Skills, and model settings independently.'
-              )}
-            </p>
           </header>
 
           <div className="project-dashboard-grid">
             <section className="project-dashboard-left">
               <article className="project-greeting-panel">
-                <h2>
-                  {dashboardGreeting}
-                  <span aria-hidden> 👋</span>
-                </h2>
-                <p>{t('今天想快乐写作吗。', 'Ready to write something great today?')}</p>
                 <div className="project-mascot-scene">
-                  <img className="project-mascot-image" src={homeBanner} alt={t('首页横幅', 'Home banner')} />
+                  <video
+                    autoPlay
+                    className="project-mascot-image"
+                    loop
+                    muted
+                    playsInline
+                    preload="metadata"
+                  >
+                    <source src={homeBannerVideo} type="video/mp4" />
+                  </video>
+                  <div className="project-greeting-copy">
+                    <h2>
+                      {dashboardGreeting}
+                      <span aria-hidden> 👋</span>
+                    </h2>
+                    <p>{t('今天想快乐写作吗。', 'Ready to write something great today?')}</p>
+                  </div>
+                </div>
+                <div className="project-quick-cards project-quick-cards-overlay">
+                  <article className="project-quick-card is-primary">
+                    <div className="project-quick-card-title">
+                      <img
+                        className="project-quick-card-icon"
+                        src={writingIcon}
+                        alt={t('继续写作', 'Resume Writing')}
+                      />
+                      <h3>{t('继续写作', 'Resume Writing')}</h3>
+                    </div>
+                    <p>
+                      {activeProject
+                        ? `${t('上次编辑：', 'Last edited: ')}${activeProject.name}`
+                        : t('暂无可继续项目。', 'No recent project to resume.')}
+                    </p>
+                    <button
+                      className="primary-button"
+                      disabled={!activeProject}
+                      onClick={() => activeProject && openProject(activeProject.id)}
+                    >
+                      {t('继续写作', 'Continue')}
+                    </button>
+                  </article>
+                  <article className="project-quick-card">
+                    <div className="project-quick-card-title">
+                      <img
+                        className="project-quick-card-icon"
+                        src={createIcon}
+                        alt={t('新建作品', 'Create Project')}
+                      />
+                      <h3>{t('新建作品', 'Create Project')}</h3>
+                    </div>
+                    <p>{t('快速创建一个全新故事。', 'Start a brand-new story quickly.')}</p>
+                    <button className="text-button" onClick={openCreateProjectModal}>
+                      {t('新建作品', 'Create')}
+                    </button>
+                  </article>
                 </div>
               </article>
-
-              <div className="project-quick-cards">
-                <article className="project-quick-card is-primary">
-                  <div className="project-quick-card-title">
-                    <img
-                      className="project-quick-card-icon"
-                      src={writingIcon}
-                      alt={t('继续写作', 'Resume Writing')}
-                    />
-                    <h3>{t('继续写作', 'Resume Writing')}</h3>
-                  </div>
-                  <p>
-                    {activeProject
-                      ? `${t('上次编辑：', 'Last edited: ')}${activeProject.name}`
-                      : t('暂无可继续项目。', 'No recent project to resume.')}
-                  </p>
-                  <button
-                    className="primary-button"
-                    disabled={!activeProject}
-                    onClick={() => activeProject && openProject(activeProject.id)}
-                  >
-                    {t('继续写作', 'Continue')}
-                  </button>
-                </article>
-                <article className="project-quick-card">
-                  <div className="project-quick-card-title">
-                    <img
-                      className="project-quick-card-icon"
-                      src={createIcon}
-                      alt={t('新建作品', 'Create Project')}
-                    />
-                    <h3>{t('新建作品', 'Create Project')}</h3>
-                  </div>
-                  <p>{t('快速创建一个全新故事。', 'Start a brand-new story quickly.')}</p>
-                  <button className="text-button" onClick={openCreateProjectModal}>
-                    {t('新建作品', 'Create')}
-                  </button>
-                </article>
-              </div>
             </section>
 
             <section className="project-recent-panel">
@@ -3519,6 +3786,19 @@ ${message}`
                           <div className="project-item-menu-dropdown" role="menu">
                             <button
                               className="text-button"
+                              disabled={renamingProjectId === project.id}
+                              onClick={() => {
+                                setProjectActionMenuId(null)
+                                requestRenameProject(project)
+                              }}
+                              type="button"
+                            >
+                              {renamingProjectId === project.id
+                                ? t('重命名中...', 'Renaming...')
+                                : t('重命名', 'Rename')}
+                            </button>
+                            <button
+                              className="text-button"
                               disabled={!hasDesktopProjectStorage}
                               onClick={() => {
                                 setProjectActionMenuId(null)
@@ -3557,36 +3837,44 @@ ${message}`
           </div>
 
           <section className="project-data-strip" aria-label={t('创作数据', 'Writing Stats')}>
-            <div className="project-stat-item">
-              <img className="project-stat-icon" src={totalCharsIcon} alt={t('累计字数', 'Total characters')} />
-              <div className="project-stat-text">
-                <strong>{totalCharsLabel}</strong>
-                <span>{t('累计字数', 'Total characters')}</span>
+            <header className="project-data-header">
+              <strong>{t('创作数据', 'Writing Stats')}</strong>
+            </header>
+            <div className="project-data-grid">
+              <div className="project-stat-item">
+                <img className="project-stat-icon" src={worksIcon} alt={t('累计字数', 'Total characters')} />
+                <div className="project-stat-text">
+                  <strong>{totalCharsLabel}</strong>
+                  <span>{t('累计字数', 'Total characters')}</span>
+                </div>
               </div>
-            </div>
-            <div className="project-stat-item">
-              <img className="project-stat-icon" src={streakIcon} alt={t('连续创作', 'Writing streak')} />
-              <div className="project-stat-text">
-                <strong>{dashboardMetrics.streakDays}</strong>
-                <span>{t('连续创作', 'Writing streak')}</span>
+              <div className="project-stat-item">
+                <img className="project-stat-icon" src={streakIcon} alt={t('连续创作', 'Writing streak')} />
+                <div className="project-stat-text">
+                  <strong>{dashboardMetrics.streakDays}</strong>
+                  <span>{t('连续创作', 'Writing streak')}</span>
+                </div>
               </div>
-            </div>
-            <div className="project-stat-item">
-              <img className="project-stat-icon" src={worksIcon} alt={t('创作作品', 'Works')} />
-              <div className="project-stat-text">
-                <strong>{dashboardMetrics.totalProjects}</strong>
-                <span>{t('创作作品', 'Works')}</span>
+              <div className="project-stat-item">
+                <img className="project-stat-icon" src={todayCharsIcon} alt={t('创作作品', 'Works')} />
+                <div className="project-stat-text">
+                  <strong>{dashboardMetrics.totalProjects}</strong>
+                  <span>{t('创作作品', 'Works')}</span>
+                </div>
               </div>
-            </div>
-            <div className="project-stat-item">
-              <img className="project-stat-icon" src={todayCharsIcon} alt={t('今日字数', "Today's words")} />
-              <div className="project-stat-text">
-                <strong>{todayCharsLabel}</strong>
-                <span>{t('今日字数', "Today's words")}</span>
+              <div className="project-stat-item">
+                <img className="project-stat-icon" src={totalCharsIcon} alt={t('今日字数', "Today's words")} />
+                <div className="project-stat-text">
+                  <strong>{todayCharsLabel}</strong>
+                  <span>{t('今日字数', "Today's words")}</span>
+                </div>
               </div>
-            </div>
-            <div className="project-data-title-banner">
-              <img className="project-data-title-image" src={titleBanner} alt={t('标题横幅', 'Title banner')} />
+              <div
+                aria-label={t('标题横幅', 'Title banner')}
+                className="project-data-title-banner"
+                role="img"
+                style={{ backgroundImage: `url(${titleBanner})` }}
+              />
             </div>
           </section>
 
@@ -3626,6 +3914,58 @@ ${message}`
                     onClick={() => createProject(newProjectName)}
                   >
                     {t('创建', 'Create')}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {pendingRenameProject && (
+            <div
+              className="project-create-modal-backdrop"
+              onMouseDown={(event) => {
+                if (event.target === event.currentTarget) cancelRenameProject()
+              }}
+            >
+              <div className="project-create-modal" onMouseDown={(event) => event.stopPropagation()}>
+                <h3>{t('重命名项目', 'Rename Project')}</h3>
+                <p>{t('请输入新的项目名称。', 'Please enter a new project name.')}</p>
+                <input
+                  autoFocus
+                  value={renameProjectInputName}
+                  onChange={(event) => {
+                    setRenameProjectInputName(event.target.value)
+                    if (renameProjectError) setRenameProjectError('')
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault()
+                      void confirmRenameProject()
+                    }
+                    if (event.key === 'Escape') {
+                      event.preventDefault()
+                      cancelRenameProject()
+                    }
+                  }}
+                  placeholder={t('输入新项目名', 'Enter new project name')}
+                />
+                {renameProjectError ? (
+                  <p className="project-delete-feedback is-error">{renameProjectError}</p>
+                ) : isRenameProjectUnchanged ? (
+                  <p className="project-delete-feedback">{t('名称未变化。', 'Name is unchanged.')}</p>
+                ) : null}
+                <div className="project-create-modal-actions">
+                  <button className="text-button" onClick={cancelRenameProject}>
+                    {t('取消', 'Cancel')}
+                  </button>
+                  <button
+                    className="primary-button"
+                    disabled={!renameProjectInputTrimmed || renamingProjectId === pendingRenameProject.id}
+                    onClick={() => void confirmRenameProject()}
+                  >
+                    {renamingProjectId === pendingRenameProject.id
+                      ? t('保存中...', 'Saving...')
+                      : t('保存名称', 'Save Name')}
                   </button>
                 </div>
               </div>
@@ -3742,6 +4082,14 @@ ${message}`
             draggable
             key={chapter.id}
             onClick={() => switchChapter(chapter.id)}
+            onMouseDown={(event) => {
+              const isCustomPage =
+                chapter.kind === 'special' && (chapter.specialType ?? 'special') === 'special'
+              if (!isCustomPage || event.button !== 2) return
+              event.preventDefault()
+              event.stopPropagation()
+              renameCustomPage(chapter.id)
+            }}
             onDragEnd={() => {
               setDraggingChapterId(null)
               setDragOverChapterId(null)
@@ -3762,6 +4110,14 @@ ${message}`
               setDraggingChapterId(chapter.id)
               event.dataTransfer.effectAllowed = 'move'
               event.dataTransfer.setData('text/plain', String(chapter.id))
+            }}
+            onContextMenu={(event) => {
+              const isCustomPage =
+                chapter.kind === 'special' && (chapter.specialType ?? 'special') === 'special'
+              if (!isCustomPage) return
+              event.preventDefault()
+              event.stopPropagation()
+              renameCustomPage(chapter.id)
             }}
             onDrop={(event) => {
               event.preventDefault()
@@ -3826,7 +4182,7 @@ ${message}`
             <img className="brand-logo" src={appLogo} alt={APP_DISPLAY_NAME} />
             <div>
               <strong>{APP_DISPLAY_NAME}</strong>
-              <span>{t('AI 写作辅助台', 'AI Writing Desk')}</span>
+              <span>{t('让AI写作更可控', 'Make AI Writing More Controllable')}</span>
             </div>
           </div>
           <div className="menu-bar-right">
@@ -4893,6 +5249,59 @@ ${message}`
           </aside>
         </div>
       </section>
+
+      {customPageRenameDialog && (
+        <div
+          className="page-rename-modal-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              cancelCustomPageRename()
+            }
+          }}
+        >
+          <div className="page-rename-modal" onMouseDown={(event) => event.stopPropagation()}>
+            <h3>{t('重命名自定义页面', 'Rename Custom Page')}</h3>
+            <p>{t('输入新的页面名称。', 'Enter a new page name.')}</p>
+            <input
+              autoFocus
+              onChange={(event) =>
+                setCustomPageRenameDialog((previous) =>
+                  previous
+                    ? {
+                        ...previous,
+                        value: event.target.value
+                      }
+                    : previous
+                )
+              }
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  commitCustomPageRename()
+                } else if (event.key === 'Escape') {
+                  event.preventDefault()
+                  cancelCustomPageRename()
+                }
+              }}
+              placeholder={t('请输入页面名称', 'Enter page name')}
+              value={customPageRenameDialog.value}
+            />
+            <div className="page-rename-modal-actions">
+              <button className="text-button" onClick={cancelCustomPageRename} type="button">
+                {t('取消', 'Cancel')}
+              </button>
+              <button
+                className="text-button"
+                disabled={!customPageRenameDialog.value.trim()}
+                onClick={commitCustomPageRename}
+                type="button"
+              >
+                {t('确认', 'Confirm')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {editorContextMenu.open && (
         <div

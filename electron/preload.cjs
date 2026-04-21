@@ -68,6 +68,9 @@ contextBridge.exposeInMainWorld('novelDesktopApi', {
   getWindowMaximizedState() {
     return ipcRenderer.invoke('novel:window-is-maximized')
   },
+  applyWindowScreenMode(payload) {
+    return ipcRenderer.invoke('novel:window-apply-screen-mode', payload)
+  },
   onWindowMaximizedChange(callback) {
     if (typeof callback !== 'function') return () => {}
     const listener = (_event, payload) => {
