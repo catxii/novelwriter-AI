@@ -1,6 +1,11 @@
 ﻿import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
 import MonacoEditor, { loader, type OnMount } from '@monaco-editor/react'
-import type { CSSProperties, MouseEvent as ReactMouseEvent, WheelEvent as ReactWheelEvent } from 'react'
+import type {
+  CSSProperties,
+  KeyboardEvent as ReactKeyboardEvent,
+  MouseEvent as ReactMouseEvent,
+  WheelEvent as ReactWheelEvent
+} from 'react'
 import * as monacoApi from 'monaco-editor'
 import type * as Monaco from 'monaco-editor'
 import appLogo from '../icon/logo.png'
@@ -92,16 +97,63 @@ type SpecialPageType = 'frontispiece' | 'prologue' | 'interlude' | 'afterword' |
 type WritingMode = 'novel' | 'script'
 type MemoryKind = 'info' | 'role'
 type RoleGraphView = 'list' | 'graph'
-type RoleLinkCorner = 'top-left' | 'top-right' | 'bottom-right' | 'bottom-left'
+type BackupGraphView = 'list' | 'graph'
+type GraphVisualSettings = {
+  backgroundColor: string
+  fontSize: number
+  dimmedOpacity: number
+}
 type RoleLinkSide = 'top' | 'right' | 'bottom' | 'left'
+type RoleRelationMode =
+  | 'solid-directed'
+  | 'solid-bidirectional'
+  | 'dashed-directed'
+  | 'dashed-bidirectional'
+type ScriptLinePrefix = {
+  lineNumber: number
+  startColumn: number
+  endColumn: number
+  rawName: string
+  normalizedName: string
+  isNarrator: boolean
+}
+
+type ScriptRolePickerState = {
+  lineNumber: number
+  x: number
+  y: number
+  query: string
+  currentName: string
+}
 
 type RoleRelation = {
   id: number
   fromMemoryId: number
   toMemoryId: number
-  fromAnchor?: RoleLinkCorner
+  fromAnchor?: RoleLinkSide
   toAnchor?: RoleLinkSide
+  curveOffsetX?: number
+  curveOffsetY?: number
+  mode: RoleRelationMode
   relation: string
+  intimacy: number
+  tags: string[]
+  strokeColor: string
+  createdAt: string
+}
+
+type BackupRelation = {
+  id: number
+  fromBackupId: number
+  toBackupId: number
+  fromAnchor?: RoleLinkSide
+  toAnchor?: RoleLinkSide
+  curveOffsetX?: number
+  curveOffsetY?: number
+  mode: RoleRelationMode
+  causal: string
+  strokeColor: string
+  labelColor: string
   createdAt: string
 }
 
@@ -116,6 +168,7 @@ type Version = {
   id: number
   title: string
   draft: string
+  writingMode: WritingMode
   updatedAt: string
   history: VersionHistoryItem[]
   historyLastSavedAtMs: number
@@ -133,6 +186,8 @@ type BackupItem = {
   id: number
   title: string
   content: string
+  backupX?: number
+  backupY?: number
   createdAt: string
   updatedAt: string
 }
@@ -173,6 +228,8 @@ type WorkspaceData = {
   activeChapterId?: number
   memory?: Array<string | Partial<MemoryItem>>
   roleRelations?: Array<Partial<RoleRelation>>
+  roleRelationTagOptions?: string[]
+  backupRelations?: Array<Partial<BackupRelation>>
   writingMode?: WritingMode
   backups?: Array<Partial<BackupItem>>
   config?: Partial<ProviderConfig>
@@ -180,6 +237,8 @@ type WorkspaceData = {
   skillsPrompt?: string
   sessionMap?: Record<string, string>
   skillModelName?: string
+  roleGraphVisual?: Partial<GraphVisualSettings>
+  backupGraphVisual?: Partial<GraphVisualSettings>
   draft?: string
 }
 
@@ -189,12 +248,16 @@ type NormalizedWorkspace = {
   writingMode: WritingMode
   memory: MemoryItem[]
   roleRelations: RoleRelation[]
+  roleRelationTagOptions: string[]
+  backupRelations: BackupRelation[]
   backups: BackupItem[]
   config: ProviderConfig
   customPrompt: string
   skillsPrompt: string
   sessionMap: Record<string, string>
   skillModelName: string
+  roleGraphVisual: GraphVisualSettings
+  backupGraphVisual: GraphVisualSettings
 }
 
 type ProjectMeta = {
@@ -288,15 +351,42 @@ const EDITOR_MENU_WIDTH = 260
 const EDITOR_MENU_HEIGHT = 400
 const ROLE_NODE_WIDTH = 188
 const ROLE_NODE_HEIGHT = 94
-const ROLE_LINK_CORNERS: RoleLinkCorner[] = [
-  'top-left',
-  'top-right',
-  'bottom-right',
-  'bottom-left'
+const BACKUP_NODE_WIDTH = 228
+const BACKUP_NODE_HEIGHT = 124
+const ROLE_LINK_SIDES: RoleLinkSide[] = ['top', 'right', 'bottom', 'left']
+const DEFAULT_ROLE_RELATION_MODE: RoleRelationMode = 'solid-directed'
+const ROLE_RELATION_MIN_INTIMACY = -100
+const ROLE_RELATION_MAX_INTIMACY = 100
+const DEFAULT_ROLE_RELATION_TAG_OPTIONS = ['嫉妒', '崇拜', '深爱', '师徒', '暗恋', '同盟']
+const ROLE_RELATION_TAG_MAX_OPTIONS = 64
+const ROLE_RELATION_MODE_OPTIONS: Array<{
+  mode: RoleRelationMode
+  icon: string
+  label: string
+}> = [
+  { mode: 'solid-directed', icon: '→', label: '单向实线' },
+  { mode: 'solid-bidirectional', icon: '↔', label: '双向实线' },
+  { mode: 'dashed-directed', icon: '⇢', label: '单向虚线' },
+  { mode: 'dashed-bidirectional', icon: '⇄', label: '双向虚线' }
 ]
+const DEFAULT_ROLE_RELATION_STROKE_COLOR = '#000000'
+const DEFAULT_BACKUP_RELATION_STROKE_COLOR = '#000000'
+const DEFAULT_BACKUP_RELATION_LABEL_COLOR = '#35506d'
+const DEFAULT_ROLE_GRAPH_BG_COLOR = '#ffffff'
+const DEFAULT_BACKUP_GRAPH_BG_COLOR = '#ffffff'
+const DEFAULT_GRAPH_FONT_SIZE = 12
+const GRAPH_FONT_SIZE_MIN = 10
+const GRAPH_FONT_SIZE_MAX = 24
+const DEFAULT_GRAPH_DIMMED_OPACITY = 0.3
+const GRAPH_DIMMED_OPACITY_MIN = 0.1
+const GRAPH_DIMMED_OPACITY_MAX = 0.9
 const ROLE_GRAPH_MIN_SCALE = 0.4
 const ROLE_GRAPH_MAX_SCALE = 2.4
 const ROLE_GRAPH_ZOOM_FACTOR = 1.12
+const SCRIPT_NARRATOR_NAMES = new Set(['旁白', 'narrator', 'narration'])
+const SCRIPT_ROLE_COLOR_COUNT = 12
+const SCRIPT_ROLE_PICKER_WIDTH = 640
+const SCRIPT_ROLE_PICKER_HEIGHT = 360
 const EDITOR_THEME_ID = 'novelwriter-dark'
 const SPECIAL_PAGE_META: Record<
   SpecialPageType,
@@ -317,8 +407,24 @@ type LegacyBackupItem = Partial<{
   versionId: number
   versionTitle: string
   content: string
+  backupX: number
+  backupY: number
   createdAt: string
   updatedAt: string
+}>
+type LegacyBackupRelation = Partial<{
+  id: number
+  fromBackupId: number
+  toBackupId: number
+  fromAnchor: RoleLinkSide
+  toAnchor: RoleLinkSide
+  curveOffsetX: number
+  curveOffsetY: number
+  mode: RoleRelationMode
+  causal: string
+  strokeColor: string
+  labelColor: string
+  createdAt: string
 }>
 const SPECIAL_PAGE_OPTIONS: Array<{ type: SpecialPageType; label: string }> = [
   { type: 'frontispiece', label: '扉页' },
@@ -402,19 +508,6 @@ function isTypingTarget(target: EventTarget | null) {
   return false
 }
 
-function getRoleCornerPoint(position: { x: number; y: number }, corner: RoleLinkCorner) {
-  switch (corner) {
-    case 'top-left':
-      return { x: position.x, y: position.y }
-    case 'top-right':
-      return { x: position.x + ROLE_NODE_WIDTH, y: position.y }
-    case 'bottom-right':
-      return { x: position.x + ROLE_NODE_WIDTH, y: position.y + ROLE_NODE_HEIGHT }
-    case 'bottom-left':
-      return { x: position.x, y: position.y + ROLE_NODE_HEIGHT }
-  }
-}
-
 function getRoleSidePoint(position: { x: number; y: number }, side: RoleLinkSide) {
   switch (side) {
     case 'top':
@@ -445,22 +538,6 @@ function pickRoleSideForPoint(position: { x: number; y: number }, point: { x: nu
   return distances[0].side
 }
 
-function pickDefaultRoleCorner(
-  fromPos: { x: number; y: number },
-  toPos: { x: number; y: number }
-): RoleLinkCorner {
-  const fromCenterX = fromPos.x + ROLE_NODE_WIDTH / 2
-  const fromCenterY = fromPos.y + ROLE_NODE_HEIGHT / 2
-  const toCenterX = toPos.x + ROLE_NODE_WIDTH / 2
-  const toCenterY = toPos.y + ROLE_NODE_HEIGHT / 2
-  const towardRight = toCenterX >= fromCenterX
-  const towardBottom = toCenterY >= fromCenterY
-  if (towardRight && towardBottom) return 'bottom-right'
-  if (towardRight && !towardBottom) return 'top-right'
-  if (!towardRight && towardBottom) return 'bottom-left'
-  return 'top-left'
-}
-
 function pickDefaultRoleSide(
   fromPos: { x: number; y: number },
   toPos: { x: number; y: number }
@@ -469,6 +546,52 @@ function pickDefaultRoleSide(
   const fromCenterY = fromPos.y + ROLE_NODE_HEIGHT / 2
   const toCenterX = toPos.x + ROLE_NODE_WIDTH / 2
   const toCenterY = toPos.y + ROLE_NODE_HEIGHT / 2
+  const dx = fromCenterX - toCenterX
+  const dy = fromCenterY - toCenterY
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    return dx >= 0 ? 'right' : 'left'
+  }
+  return dy >= 0 ? 'bottom' : 'top'
+}
+
+function getBackupSidePoint(position: { x: number; y: number }, side: RoleLinkSide) {
+  switch (side) {
+    case 'top':
+      return { x: position.x + BACKUP_NODE_WIDTH / 2, y: position.y }
+    case 'right':
+      return { x: position.x + BACKUP_NODE_WIDTH, y: position.y + BACKUP_NODE_HEIGHT / 2 }
+    case 'bottom':
+      return { x: position.x + BACKUP_NODE_WIDTH / 2, y: position.y + BACKUP_NODE_HEIGHT }
+    case 'left':
+      return { x: position.x, y: position.y + BACKUP_NODE_HEIGHT / 2 }
+  }
+}
+
+function pickBackupSideForPoint(position: { x: number; y: number }, point: { x: number; y: number }) {
+  const distances: Array<{ side: RoleLinkSide; distance: number }> = [
+    { side: 'top', distance: Math.abs(point.y - position.y) },
+    {
+      side: 'right',
+      distance: Math.abs(point.x - (position.x + BACKUP_NODE_WIDTH))
+    },
+    {
+      side: 'bottom',
+      distance: Math.abs(point.y - (position.y + BACKUP_NODE_HEIGHT))
+    },
+    { side: 'left', distance: Math.abs(point.x - position.x) }
+  ]
+  distances.sort((a, b) => a.distance - b.distance)
+  return distances[0].side
+}
+
+function pickDefaultBackupSide(
+  fromPos: { x: number; y: number },
+  toPos: { x: number; y: number }
+): RoleLinkSide {
+  const fromCenterX = fromPos.x + BACKUP_NODE_WIDTH / 2
+  const fromCenterY = fromPos.y + BACKUP_NODE_HEIGHT / 2
+  const toCenterX = toPos.x + BACKUP_NODE_WIDTH / 2
+  const toCenterY = toPos.y + BACKUP_NODE_HEIGHT / 2
   const dx = fromCenterX - toCenterX
   const dy = fromCenterY - toCenterY
   if (Math.abs(dx) >= Math.abs(dy)) {
@@ -486,6 +609,213 @@ function getRoleStanceLabel(value: number) {
   if (value <= 3) return '正派'
   if (value >= 8) return '反派'
   return '中立'
+}
+
+function getRoleNodeToneStyle(stance: number): CSSProperties {
+  const normalized = clampRoleStance(stance)
+
+  if (normalized <= 3) {
+    // 1 -> strongest green, 3 -> light green
+    const strength = (4 - normalized) / 3
+    const borderAlpha = 0.4 + strength * 0.35
+    return {
+      background: '#ffffff',
+      borderColor: `rgba(36, 133, 63, ${borderAlpha.toFixed(3)})`
+    }
+  }
+
+  if (normalized >= 8) {
+    // 8 -> light red, 10 -> strongest red
+    const strength = (normalized - 7) / 3
+    const borderAlpha = 0.4 + strength * 0.35
+    return {
+      background: '#ffffff',
+      borderColor: `rgba(189, 42, 23, ${borderAlpha.toFixed(3)})`
+    }
+  }
+
+  // Neutral stays white
+  return {
+    background: '#ffffff',
+    borderColor: 'rgba(36, 96, 160, 0.34)'
+  }
+}
+
+function parseRoleRelationMode(value: unknown): RoleRelationMode {
+  if (
+    value === 'solid-directed' ||
+    value === 'solid-bidirectional' ||
+    value === 'dashed-directed' ||
+    value === 'dashed-bidirectional'
+  ) {
+    return value
+  }
+  return 'solid-bidirectional'
+}
+
+function normalizeRelationColor(value: unknown, fallback: string) {
+  if (typeof value !== 'string') return fallback
+  const trimmed = value.trim()
+  if (/^#[0-9a-fA-F]{6}$/.test(trimmed)) return trimmed.toLowerCase()
+  return fallback
+}
+
+function normalizeGraphVisualSettings(
+  value: unknown,
+  fallbackBackgroundColor: string
+): GraphVisualSettings {
+  const next =
+    value && typeof value === 'object'
+      ? (value as Partial<GraphVisualSettings>)
+      : ({} as Partial<GraphVisualSettings>)
+  const backgroundColor = normalizeRelationColor(next.backgroundColor, fallbackBackgroundColor)
+  const fontSizeRaw =
+    typeof next.fontSize === 'number' && Number.isFinite(next.fontSize)
+      ? next.fontSize
+      : DEFAULT_GRAPH_FONT_SIZE
+  const dimmedOpacityRaw =
+    typeof next.dimmedOpacity === 'number' && Number.isFinite(next.dimmedOpacity)
+      ? next.dimmedOpacity
+      : DEFAULT_GRAPH_DIMMED_OPACITY
+  return {
+    backgroundColor,
+    fontSize: clampNumber(Math.round(fontSizeRaw), GRAPH_FONT_SIZE_MIN, GRAPH_FONT_SIZE_MAX),
+    dimmedOpacity:
+      Math.round(
+        clampNumber(dimmedOpacityRaw, GRAPH_DIMMED_OPACITY_MIN, GRAPH_DIMMED_OPACITY_MAX) * 100
+      ) / 100
+  }
+}
+
+function isRoleRelationDashed(mode: RoleRelationMode) {
+  return mode === 'dashed-directed' || mode === 'dashed-bidirectional'
+}
+
+function isRoleRelationBidirectional(mode: RoleRelationMode) {
+  return mode === 'solid-bidirectional' || mode === 'dashed-bidirectional'
+}
+
+function getRoleRelationModeText(mode: RoleRelationMode) {
+  if (mode === 'solid-directed') return '单向实线'
+  if (mode === 'solid-bidirectional') return '双向实线'
+  if (mode === 'dashed-directed') return '单向虚线'
+  return '双向虚线'
+}
+
+function normalizeRelationIntimacy(value: number) {
+  if (!Number.isFinite(value)) return 0
+  return clampNumber(Math.round(value), ROLE_RELATION_MIN_INTIMACY, ROLE_RELATION_MAX_INTIMACY)
+}
+
+function splitRelationTags(raw: string) {
+  return [...new Set(
+    raw
+      .split(/[，,、\s]+/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+  )].slice(0, 12)
+}
+
+function normalizeRoleRelationTagOptions(raw: unknown): string[] {
+  const base = DEFAULT_ROLE_RELATION_TAG_OPTIONS
+  if (!Array.isArray(raw)) return [...base]
+  const seen = new Set<string>()
+  const output: string[] = []
+  for (const item of base) {
+    const key = item.trim().toLowerCase()
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    output.push(item.trim())
+  }
+  for (const item of raw) {
+    if (typeof item !== 'string') continue
+    const tag = item.trim()
+    if (!tag) continue
+    const key = tag.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    output.push(tag)
+    if (output.length >= ROLE_RELATION_TAG_MAX_OPTIONS) break
+  }
+  return output
+}
+
+function mergeRoleRelationTagOptions(current: string[], rawInput: string): string[] {
+  const incoming = splitRelationTags(rawInput)
+  if (!incoming.length) return current
+  const seen = new Set<string>()
+  const output: string[] = []
+  for (const item of current) {
+    const tag = item.trim()
+    if (!tag) continue
+    const key = tag.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    output.push(tag)
+  }
+  for (const tag of incoming) {
+    const key = tag.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    output.push(tag)
+    if (output.length >= ROLE_RELATION_TAG_MAX_OPTIONS) break
+  }
+  return output
+}
+
+function getRoleIntimacyLabel(intimacy: number) {
+  if (intimacy >= 75) return '生死相依'
+  if (intimacy >= 45) return '亲密'
+  if (intimacy >= 15) return '友好'
+  if (intimacy <= -75) return '不共戴天'
+  if (intimacy <= -45) return '敌对'
+  if (intimacy <= -15) return '疏离'
+  return '中性'
+}
+
+function getRoleRelationDisplayText(relation: Pick<RoleRelation, 'relation' | 'tags' | 'intimacy'>) {
+  const relationText = relation.relation.trim()
+  if (relationText) return relationText
+  const tags = Array.isArray(relation.tags) ? relation.tags.filter(Boolean) : []
+  if (tags.length > 0) return tags.join('、')
+  const intimacy = normalizeRelationIntimacy(relation.intimacy ?? 0)
+  return `亲密度 ${intimacy}`
+}
+
+function getRoleRelationControlPoint(
+  fromPoint: { x: number; y: number },
+  toPoint: { x: number; y: number },
+  relation: Pick<RoleRelation, 'curveOffsetX' | 'curveOffsetY'>
+) {
+  const midX = (fromPoint.x + toPoint.x) / 2
+  const midY = (fromPoint.y + toPoint.y) / 2
+  return {
+    x: midX + (Number.isFinite(relation.curveOffsetX as number) ? (relation.curveOffsetX as number) : 0),
+    y: midY + (Number.isFinite(relation.curveOffsetY as number) ? (relation.curveOffsetY as number) : 0)
+  }
+}
+
+function getQuadraticBezierPoint(
+  start: { x: number; y: number },
+  control: { x: number; y: number },
+  end: { x: number; y: number },
+  t: number
+) {
+  const clampedT = clampNumber(t, 0, 1)
+  const oneMinusT = 1 - clampedT
+  return {
+    x: oneMinusT * oneMinusT * start.x + 2 * oneMinusT * clampedT * control.x + clampedT * clampedT * end.x,
+    y: oneMinusT * oneMinusT * start.y + 2 * oneMinusT * clampedT * control.y + clampedT * clampedT * end.y
+  }
+}
+
+function getRoleStanceEmoji(stance: number) {
+  const normalized = clampRoleStance(stance)
+  if (normalized <= 2) return '😃'
+  if (normalized <= 4) return '😊'
+  if (normalized <= 6) return '😐'
+  if (normalized <= 8) return '😡'
+  return '👿'
 }
 
 function buildRoleMemoryText(name: string, note: string) {
@@ -604,6 +934,7 @@ function buildVersion(
   id: number,
   index: number,
   draft: string,
+  writingMode: WritingMode = 'novel',
   updatedAt = nowLabel(),
   history: VersionHistoryItem[] = [],
   historyLastSavedAtMs?: number
@@ -617,6 +948,7 @@ function buildVersion(
     id,
     title: `版本${index}`,
     draft,
+    writingMode,
     updatedAt,
     history: normalizedHistory,
     historyLastSavedAtMs:
@@ -704,7 +1036,11 @@ function pickVisibleVersionIds(
   return versions.filter((version) => chosen.has(version.id)).map((version) => version.id)
 }
 
-function normalizeChapter(input: LegacyChapter, index: number): Chapter {
+function normalizeChapter(
+  input: LegacyChapter,
+  index: number,
+  fallbackWritingMode: WritingMode
+): Chapter {
   const id = typeof input.id === 'number' ? input.id : index + 1
   const kind = inferChapterKind(input)
   const specialType =
@@ -734,6 +1070,7 @@ function normalizeChapter(input: LegacyChapter, index: number): Chapter {
             ? version.title
             : `版本${versionIndex + 1}`,
         draft: typeof version.draft === 'string' ? version.draft : '',
+        writingMode: version.writingMode === 'script' ? 'script' : fallbackWritingMode,
         updatedAt:
           typeof version.updatedAt === 'string' && version.updatedAt.trim()
             ? version.updatedAt
@@ -754,8 +1091,22 @@ function normalizeChapter(input: LegacyChapter, index: number): Chapter {
     return { id, kind, specialType, title, versions, activeVersionId }
   }
 
-  const firstVersion = buildVersion(1, 1, typeof input.draft === 'string' ? input.draft : '')
+  const firstVersion = buildVersion(
+    1,
+    1,
+    typeof input.draft === 'string' ? input.draft : '',
+    fallbackWritingMode
+  )
   return { id, kind, specialType, title, versions: [firstVersion], activeVersionId: firstVersion.id }
+}
+
+function normalizeRoleName(raw: string) {
+  return raw
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .replace(/[|｜]/g, '')
+    .replace(/^[：:【\[\s]+|[】\]\s：:]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
 }
 
 function createProjectId() {
@@ -781,7 +1132,7 @@ function createDefaultWorkspace(): NormalizedWorkspace {
     id: 1,
     kind: 'chapter',
     title: '第1章',
-    versions: [buildVersion(1, 1, '')],
+    versions: [buildVersion(1, 1, '', 'novel')],
     activeVersionId: 1
   }
   return {
@@ -790,12 +1141,24 @@ function createDefaultWorkspace(): NormalizedWorkspace {
     writingMode: 'novel',
     memory: [],
     roleRelations: [],
+    roleRelationTagOptions: [...DEFAULT_ROLE_RELATION_TAG_OPTIONS],
+    backupRelations: [],
     backups: [],
     config: createDefaultConfig(),
     customPrompt: '为下一章提供 3 个悬念钩子。',
     skillsPrompt: '',
     sessionMap: {},
-    skillModelName: ''
+    skillModelName: '',
+    roleGraphVisual: {
+      backgroundColor: DEFAULT_ROLE_GRAPH_BG_COLOR,
+      fontSize: DEFAULT_GRAPH_FONT_SIZE,
+      dimmedOpacity: DEFAULT_GRAPH_DIMMED_OPACITY
+    },
+    backupGraphVisual: {
+      backgroundColor: DEFAULT_BACKUP_GRAPH_BG_COLOR,
+      fontSize: DEFAULT_GRAPH_FONT_SIZE,
+      dimmedOpacity: DEFAULT_GRAPH_DIMMED_OPACITY
+    }
   }
 }
 
@@ -806,26 +1169,33 @@ function toWorkspaceData(snapshot: NormalizedWorkspace): WorkspaceData {
     writingMode: snapshot.writingMode,
     memory: snapshot.memory,
     roleRelations: snapshot.roleRelations,
+    roleRelationTagOptions: snapshot.roleRelationTagOptions,
+    backupRelations: snapshot.backupRelations,
     backups: snapshot.backups,
     config: snapshot.config,
     customPrompt: snapshot.customPrompt,
     skillsPrompt: snapshot.skillsPrompt,
     sessionMap: snapshot.sessionMap,
-    skillModelName: snapshot.skillModelName
+    skillModelName: snapshot.skillModelName,
+    roleGraphVisual: snapshot.roleGraphVisual,
+    backupGraphVisual: snapshot.backupGraphVisual
   }
 }
 
 function normalizeWorkspaceData(parsed: WorkspaceData): NormalizedWorkspace | null {
+  const fallbackWritingMode: WritingMode = parsed.writingMode === 'script' ? 'script' : 'novel'
   let chapters: Chapter[] = []
   if (Array.isArray(parsed.chapters) && parsed.chapters.length > 0) {
-    chapters = parsed.chapters.map(normalizeChapter)
+    chapters = parsed.chapters.map((chapter, index) =>
+      normalizeChapter(chapter, index, fallbackWritingMode)
+    )
   } else if (typeof parsed.draft === 'string') {
     chapters = [
       {
         id: 1,
         kind: 'chapter',
         title: '第1章',
-        versions: [buildVersion(1, 1, parsed.draft)],
+        versions: [buildVersion(1, 1, parsed.draft, fallbackWritingMode)],
         activeVersionId: 1
       }
     ]
@@ -841,8 +1211,11 @@ function normalizeWorkspaceData(parsed: WorkspaceData): NormalizedWorkspace | nu
 
   const activeChapter =
     chapters.find((chapter) => chapter.id === activeChapterId) ?? chapters[0]
+  const activeVersion =
+    activeChapter.versions.find((version) => version.id === activeChapter.activeVersionId) ??
+    activeChapter.versions[0]
 
-  const memory: MemoryItem[] = Array.isArray(parsed.memory)
+  let memory: MemoryItem[] = Array.isArray(parsed.memory)
     ? parsed.memory.reduce<MemoryItem[]>((acc, entry, index) => {
         const text =
           typeof entry === 'string'
@@ -948,23 +1321,50 @@ function normalizeWorkspaceData(parsed: WorkspaceData): NormalizedWorkspace | nu
       }, [])
     : []
 
+  const roleIdRemap = new Map<number, number>()
+  if (memory.length > 0) {
+    const roleNameToCanonicalId = new Map<string, number>()
+    memory = memory.filter((item) => {
+      if (item.kind !== 'role') return true
+      const baseRoleName =
+        typeof item.roleName === 'string' && item.roleName.trim()
+          ? item.roleName
+          : parseLegacyRoleText(item.text).roleName
+      const normalized = normalizeRoleName(baseRoleName).toLowerCase()
+      if (!normalized) return true
+      const existingId = roleNameToCanonicalId.get(normalized)
+      if (typeof existingId === 'number') {
+        roleIdRemap.set(item.id, existingId)
+        return false
+      }
+      roleNameToCanonicalId.set(normalized, item.id)
+      return true
+    })
+  }
+
   const roleMemoryIds = new Set(memory.filter((item) => item.kind === 'role').map((item) => item.id))
   const roleRelations: RoleRelation[] = Array.isArray(parsed.roleRelations)
     ? parsed.roleRelations.reduce<RoleRelation[]>((acc, entry, index) => {
         if (!entry || typeof entry !== 'object') return acc
-        const fromMemoryId = typeof entry.fromMemoryId === 'number' ? entry.fromMemoryId : NaN
-        const toMemoryId = typeof entry.toMemoryId === 'number' ? entry.toMemoryId : NaN
+        const fromMemoryIdRaw = typeof entry.fromMemoryId === 'number' ? entry.fromMemoryId : NaN
+        const toMemoryIdRaw = typeof entry.toMemoryId === 'number' ? entry.toMemoryId : NaN
+        const fromMemoryId = roleIdRemap.get(fromMemoryIdRaw) ?? fromMemoryIdRaw
+        const toMemoryId = roleIdRemap.get(toMemoryIdRaw) ?? toMemoryIdRaw
         if (!Number.isFinite(fromMemoryId) || !Number.isFinite(toMemoryId)) return acc
         if (!roleMemoryIds.has(fromMemoryId) || !roleMemoryIds.has(toMemoryId)) return acc
         const relation =
           typeof entry.relation === 'string' && entry.relation.trim() ? entry.relation.trim() : ''
-        const fromAnchor: RoleLinkCorner | undefined =
-          entry.fromAnchor === 'top-left' ||
-          entry.fromAnchor === 'top-right' ||
-          entry.fromAnchor === 'bottom-right' ||
-          entry.fromAnchor === 'bottom-left'
+        const fromAnchor: RoleLinkSide | undefined =
+          entry.fromAnchor === 'top' ||
+          entry.fromAnchor === 'right' ||
+          entry.fromAnchor === 'bottom' ||
+          entry.fromAnchor === 'left'
             ? entry.fromAnchor
-            : undefined
+            : entry.fromAnchor === 'top-left' || entry.fromAnchor === 'top-right'
+              ? 'top'
+              : entry.fromAnchor === 'bottom-left' || entry.fromAnchor === 'bottom-right'
+                ? 'bottom'
+                : undefined
         const toAnchor: RoleLinkSide | undefined =
           entry.toAnchor === 'top' ||
           entry.toAnchor === 'right' ||
@@ -972,13 +1372,46 @@ function normalizeWorkspaceData(parsed: WorkspaceData): NormalizedWorkspace | nu
           entry.toAnchor === 'left'
             ? entry.toAnchor
             : undefined
+        const curveOffsetX =
+          typeof (entry as { curveOffsetX?: unknown }).curveOffsetX === 'number' &&
+          Number.isFinite((entry as { curveOffsetX?: number }).curveOffsetX)
+            ? ((entry as { curveOffsetX?: number }).curveOffsetX as number)
+            : 0
+        const curveOffsetY =
+          typeof (entry as { curveOffsetY?: unknown }).curveOffsetY === 'number' &&
+          Number.isFinite((entry as { curveOffsetY?: number }).curveOffsetY)
+            ? ((entry as { curveOffsetY?: number }).curveOffsetY as number)
+            : 0
+        const mode = parseRoleRelationMode((entry as { mode?: unknown }).mode)
+        const strokeColor = normalizeRelationColor(
+          (entry as { strokeColor?: unknown }).strokeColor,
+          DEFAULT_ROLE_RELATION_STROKE_COLOR
+        )
+        const intimacy = normalizeRelationIntimacy(
+          typeof (entry as { intimacy?: unknown }).intimacy === 'number'
+            ? ((entry as { intimacy?: number }).intimacy as number)
+            : 0
+        )
+        const tags = Array.isArray((entry as { tags?: unknown }).tags)
+          ? [...new Set(
+              ((entry as { tags?: unknown[] }).tags as unknown[])
+                .map((item) => (typeof item === 'string' ? item.trim() : ''))
+                .filter(Boolean)
+            )].slice(0, 12)
+          : []
         acc.push({
           id: typeof entry.id === 'number' ? entry.id : Date.now() + index,
           fromMemoryId,
           toMemoryId,
           ...(fromAnchor ? { fromAnchor } : {}),
           ...(toAnchor ? { toAnchor } : {}),
+          curveOffsetX,
+          curveOffsetY,
+          mode,
           relation,
+          intimacy,
+          tags,
+          strokeColor,
           createdAt:
             typeof entry.createdAt === 'string' && entry.createdAt.trim() ? entry.createdAt : nowLabel()
         })
@@ -1009,15 +1442,91 @@ function normalizeWorkspaceData(parsed: WorkspaceData): NormalizedWorkspace | nu
             typeof backup.updatedAt === 'string' && backup.updatedAt.trim()
               ? backup.updatedAt
               : createdAt
+          const backupX =
+            typeof backup.backupX === 'number' && Number.isFinite(backup.backupX)
+              ? backup.backupX
+              : undefined
+          const backupY =
+            typeof backup.backupY === 'number' && Number.isFinite(backup.backupY)
+              ? backup.backupY
+              : undefined
           return {
             id: typeof backup.id === 'number' ? backup.id : Date.now() + index,
             title,
             content,
+            ...(typeof backupX === 'number' ? { backupX } : {}),
+            ...(typeof backupY === 'number' ? { backupY } : {}),
             createdAt,
             updatedAt
           }
         })
         .filter((item) => item.content.trim() || item.title.trim())
+    : []
+  const backupIdSet = new Set(backups.map((item) => item.id))
+  const backupRelations: BackupRelation[] = Array.isArray(parsed.backupRelations)
+    ? parsed.backupRelations.reduce<BackupRelation[]>((acc, entry, index) => {
+        if (!entry || typeof entry !== 'object') return acc
+        const relation = entry as LegacyBackupRelation
+        const fromBackupId =
+          typeof relation.fromBackupId === 'number' ? relation.fromBackupId : NaN
+        const toBackupId = typeof relation.toBackupId === 'number' ? relation.toBackupId : NaN
+        if (!Number.isFinite(fromBackupId) || !Number.isFinite(toBackupId)) return acc
+        if (!backupIdSet.has(fromBackupId) || !backupIdSet.has(toBackupId)) return acc
+        if (fromBackupId === toBackupId) return acc
+        const fromAnchor: RoleLinkSide | undefined =
+          relation.fromAnchor === 'top' ||
+          relation.fromAnchor === 'right' ||
+          relation.fromAnchor === 'bottom' ||
+          relation.fromAnchor === 'left'
+            ? relation.fromAnchor
+            : undefined
+        const toAnchor: RoleLinkSide | undefined =
+          relation.toAnchor === 'top' ||
+          relation.toAnchor === 'right' ||
+          relation.toAnchor === 'bottom' ||
+          relation.toAnchor === 'left'
+            ? relation.toAnchor
+            : undefined
+        const curveOffsetX =
+          typeof relation.curveOffsetX === 'number' && Number.isFinite(relation.curveOffsetX)
+            ? relation.curveOffsetX
+            : 0
+        const curveOffsetY =
+          typeof relation.curveOffsetY === 'number' && Number.isFinite(relation.curveOffsetY)
+            ? relation.curveOffsetY
+            : 0
+        const mode = parseRoleRelationMode(relation.mode)
+        const causal =
+          typeof relation.causal === 'string' && relation.causal.trim()
+            ? relation.causal.trim()
+            : '因果'
+        const strokeColor = normalizeRelationColor(
+          relation.strokeColor,
+          DEFAULT_BACKUP_RELATION_STROKE_COLOR
+        )
+        const labelColor = normalizeRelationColor(
+          relation.labelColor,
+          DEFAULT_BACKUP_RELATION_LABEL_COLOR
+        )
+        acc.push({
+          id: typeof relation.id === 'number' ? relation.id : Date.now() + index,
+          fromBackupId,
+          toBackupId,
+          ...(fromAnchor ? { fromAnchor } : {}),
+          ...(toAnchor ? { toAnchor } : {}),
+          curveOffsetX,
+          curveOffsetY,
+          mode,
+          causal,
+          strokeColor,
+          labelColor,
+          createdAt:
+            typeof relation.createdAt === 'string' && relation.createdAt.trim()
+              ? relation.createdAt
+              : nowLabel()
+        })
+        return acc
+      }, [])
     : []
 
   const config = createDefaultConfig()
@@ -1042,9 +1551,11 @@ function normalizeWorkspaceData(parsed: WorkspaceData): NormalizedWorkspace | nu
   return {
     chapters,
     activeChapterId,
-    writingMode: parsed.writingMode === 'script' ? 'script' : 'novel',
+    writingMode: activeVersion?.writingMode === 'script' ? 'script' : fallbackWritingMode,
     memory,
     roleRelations,
+    roleRelationTagOptions: normalizeRoleRelationTagOptions(parsed.roleRelationTagOptions),
+    backupRelations,
     backups,
     config,
     customPrompt:
@@ -1054,7 +1565,15 @@ function normalizeWorkspaceData(parsed: WorkspaceData): NormalizedWorkspace | nu
     skillsPrompt: typeof parsed.skillsPrompt === 'string' ? parsed.skillsPrompt : '',
     sessionMap:
       parsed.sessionMap && typeof parsed.sessionMap === 'object' ? parsed.sessionMap : {},
-    skillModelName: typeof parsed.skillModelName === 'string' ? parsed.skillModelName : ''
+    skillModelName: typeof parsed.skillModelName === 'string' ? parsed.skillModelName : '',
+    roleGraphVisual: normalizeGraphVisualSettings(
+      parsed.roleGraphVisual,
+      DEFAULT_ROLE_GRAPH_BG_COLOR
+    ),
+    backupGraphVisual: normalizeGraphVisualSettings(
+      parsed.backupGraphVisual,
+      DEFAULT_BACKUP_GRAPH_BG_COLOR
+    )
   }
 }
 
@@ -1133,6 +1652,12 @@ function touchProjectMeta(projectId: string, updatedAt: string) {
 function App() {
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null)
   const monacoRef = useRef<typeof Monaco | null>(null)
+  const scriptRolePickerRef = useRef<HTMLDivElement | null>(null)
+  const scriptRolePickerInputRef = useRef<HTMLInputElement | null>(null)
+  const scriptPrefixDecorationIdsRef = useRef<string[]>([])
+  const scriptLinePrefixByLineRef = useRef<Map<number, ScriptLinePrefix>>(new Map())
+  const scriptDecorationFrameRef = useRef<number | null>(null)
+  const trackedScriptRoleNamesRef = useRef<Set<string>>(new Set())
   const editorContextMenuRef = useRef<HTMLDivElement | null>(null)
   const customSkillUploadRef = useRef<HTMLInputElement | null>(null)
   const versionTabsViewportRef = useRef<HTMLDivElement | null>(null)
@@ -1144,10 +1669,7 @@ function App() {
   const assistantMessagesViewportRef = useRef<HTMLDivElement | null>(null)
   const autoConnectAttemptKeyRef = useRef('')
   const legacyWorkspace = useMemo(() => loadLegacyWorkspace(), [])
-  const initialWorkspace = useMemo(
-    () => legacyWorkspace ?? createDefaultWorkspace(),
-    [legacyWorkspace]
-  )
+  const initialWorkspace = useMemo(() => createDefaultWorkspace(), [])
 
   const [projects, setProjects] = useState<ProjectMeta[]>(() => loadProjectIndex())
   const [activeProjectId, setActiveProjectId] = useState<string>(
@@ -1190,6 +1712,12 @@ function App() {
   const [memory, setMemory] = useState<MemoryItem[]>(initialWorkspace.memory)
   const [roleRelations, setRoleRelations] = useState<RoleRelation[]>(
     initialWorkspace.roleRelations
+  )
+  const [roleRelationTagOptions, setRoleRelationTagOptions] = useState<string[]>(
+    normalizeRoleRelationTagOptions(initialWorkspace.roleRelationTagOptions)
+  )
+  const [backupRelations, setBackupRelations] = useState<BackupRelation[]>(
+    initialWorkspace.backupRelations
   )
   const [backups, setBackups] = useState<BackupItem[]>(initialWorkspace.backups)
   const [config, setConfig] = useState<ProviderConfig>(initialWorkspace.config)
@@ -1236,11 +1764,15 @@ function App() {
   const [memoryModule, setMemoryModule] = useState<MemoryKind>('info')
   const [roleGraphView, setRoleGraphView] = useState<RoleGraphView>('list')
   const [isRoleGraphFullscreen, setIsRoleGraphFullscreen] = useState(false)
+  const [isRoleGraphVisualDialogOpen, setIsRoleGraphVisualDialogOpen] = useState(false)
   const [roleGraphViewport, setRoleGraphViewport] = useState({
     x: 0,
     y: 0,
     scale: 1
   })
+  const [roleGraphVisual, setRoleGraphVisual] = useState<GraphVisualSettings>(
+    initialWorkspace.roleGraphVisual
+  )
   const [isRoleGraphSpacePressed, setIsRoleGraphSpacePressed] = useState(false)
   const [isRoleGraphPanning, setIsRoleGraphPanning] = useState(false)
   const [roleEditorDialog, setRoleEditorDialog] = useState<{
@@ -1249,12 +1781,52 @@ function App() {
     roleNote: string
     roleStance: number
   } | null>(null)
+  const [roleRelationEditorDialog, setRoleRelationEditorDialog] = useState<{
+    relationId: number
+    intimacy: number
+    tagsInput: string
+  } | null>(null)
+  const [hoveredRoleRelationId, setHoveredRoleRelationId] = useState<number | null>(null)
+  const [draggingRoleRelationCurve, setDraggingRoleRelationCurve] = useState<{
+    relationId: number
+  } | null>(null)
+  const [selectedRoleIds, setSelectedRoleIds] = useState<Set<number>>(new Set())
+  const [roleSelectionBox, setRoleSelectionBox] = useState<{
+    start: { x: number; y: number }
+    current: { x: number; y: number }
+    additive: boolean
+    baseSelectedIds: number[]
+  } | null>(null)
+  const [roleNodeMenu, setRoleNodeMenu] = useState<{
+    open: boolean
+    x: number
+    y: number
+    roleId: number | null
+  }>({
+    open: false,
+    x: 0,
+    y: 0,
+    roleId: null
+  })
   const [draggingRoleId, setDraggingRoleId] = useState<number | null>(null)
   const [hoveredRoleId, setHoveredRoleId] = useState<number | null>(null)
   const [roleDragOffset, setRoleDragOffset] = useState({ x: 0, y: 0 })
+  const [scriptRolePickerRoleDraft, setScriptRolePickerRoleDraft] = useState<{
+    roleId: number
+    roleName: string
+    roleNote: string
+    roleStance: number
+  } | null>(null)
+  const [activeRoleRelationMode, setActiveRoleRelationMode] = useState<RoleRelationMode>(
+    DEFAULT_ROLE_RELATION_MODE
+  )
+  const [activeRoleRelationStrokeColor, setActiveRoleRelationStrokeColor] = useState(
+    DEFAULT_ROLE_RELATION_STROKE_COLOR
+  )
   const [roleLinkStart, setRoleLinkStart] = useState<{
     roleId: number
-    corner: RoleLinkCorner
+    side: RoleLinkSide
+    mode: RoleRelationMode
   } | null>(null)
   const [roleLinkTarget, setRoleLinkTarget] = useState<{
     roleId: number
@@ -1273,6 +1845,77 @@ function App() {
     relationId: null
   })
   const [backupSearchQuery, setBackupSearchQuery] = useState('')
+  const [backupGraphView, setBackupGraphView] = useState<BackupGraphView>('list')
+  const [isBackupGraphFullscreen, setIsBackupGraphFullscreen] = useState(false)
+  const [isBackupGraphVisualDialogOpen, setIsBackupGraphVisualDialogOpen] = useState(false)
+  const [backupGraphViewport, setBackupGraphViewport] = useState({
+    x: 0,
+    y: 0,
+    scale: 1
+  })
+  const [backupGraphVisual, setBackupGraphVisual] = useState<GraphVisualSettings>(
+    initialWorkspace.backupGraphVisual
+  )
+  const [isBackupGraphSpacePressed, setIsBackupGraphSpacePressed] = useState(false)
+  const [isBackupGraphPanning, setIsBackupGraphPanning] = useState(false)
+  const [draggingBackupId, setDraggingBackupId] = useState<number | null>(null)
+  const [hoveredBackupId, setHoveredBackupId] = useState<number | null>(null)
+  const [selectedBackupId, setSelectedBackupId] = useState<number | null>(null)
+  const [backupDragOffset, setBackupDragOffset] = useState({ x: 0, y: 0 })
+  const [backupActiveRelationMode, setBackupActiveRelationMode] = useState<RoleRelationMode>(
+    DEFAULT_ROLE_RELATION_MODE
+  )
+  const [backupActiveRelationStrokeColor, setBackupActiveRelationStrokeColor] = useState(
+    DEFAULT_BACKUP_RELATION_STROKE_COLOR
+  )
+  const [backupActiveRelationLabelColor, setBackupActiveRelationLabelColor] = useState(
+    DEFAULT_BACKUP_RELATION_LABEL_COLOR
+  )
+  const [backupLinkStart, setBackupLinkStart] = useState<{
+    backupId: number
+    side: RoleLinkSide
+    mode: RoleRelationMode
+  } | null>(null)
+  const [backupLinkTarget, setBackupLinkTarget] = useState<{
+    backupId: number
+    side: RoleLinkSide
+  } | null>(null)
+  const [backupLinkPreview, setBackupLinkPreview] = useState<{ x: number; y: number } | null>(null)
+  const [hoveredBackupRelationId, setHoveredBackupRelationId] = useState<number | null>(null)
+  const [draggingBackupRelationCurve, setDraggingBackupRelationCurve] = useState<{
+    relationId: number
+  } | null>(null)
+  const [backupRelationEditorDialog, setBackupRelationEditorDialog] = useState<{
+    relationId: number
+    causal: string
+  } | null>(null)
+  const [backupRelationMenu, setBackupRelationMenu] = useState<{
+    open: boolean
+    x: number
+    y: number
+    relationId: number | null
+  }>({
+    open: false,
+    x: 0,
+    y: 0,
+    relationId: null
+  })
+  const [backupNodeMenu, setBackupNodeMenu] = useState<{
+    open: boolean
+    x: number
+    y: number
+    backupId: number | null
+  }>({
+    open: false,
+    x: 0,
+    y: 0,
+    backupId: null
+  })
+  const [backupEditorDialog, setBackupEditorDialog] = useState<{
+    backupId: number
+    title: string
+    content: string
+  } | null>(null)
   const [isAdvancedSettingsOpen, setIsAdvancedSettingsOpen] = useState(false)
   const [isVersionHistoryOpen, setIsVersionHistoryOpen] = useState(false)
   const [selectedHistoryId, setSelectedHistoryId] = useState<number | null>(null)
@@ -1287,15 +1930,30 @@ function App() {
     chapterId: number
     value: string
   } | null>(null)
+  const [scriptRolePicker, setScriptRolePicker] = useState<ScriptRolePickerState | null>(null)
   const [isWorkspaceBootstrapping, setIsWorkspaceBootstrapping] = useState(true)
   const roleGraphBoardRef = useRef<HTMLDivElement | null>(null)
+  const backupGraphBoardRef = useRef<HTMLDivElement | null>(null)
   const roleGraphPanStartRef = useRef<{
     clientX: number
     clientY: number
     originX: number
     originY: number
   } | null>(null)
+  const backupGraphPanStartRef = useRef<{
+    clientX: number
+    clientY: number
+    originX: number
+    originY: number
+  } | null>(null)
   const roleRelationMenuRef = useRef<HTMLDivElement | null>(null)
+  const backupRelationMenuRef = useRef<HTMLDivElement | null>(null)
+  const roleNodeMenuRef = useRef<HTMLDivElement | null>(null)
+  const backupNodeMenuRef = useRef<HTMLDivElement | null>(null)
+  const roleRelationsRef = useRef<RoleRelation[]>(roleRelations)
+  const backupRelationsRef = useRef<BackupRelation[]>(backupRelations)
+  const roleDragIdsRef = useRef<number[]>([])
+  const roleDragOffsetsByIdRef = useRef<Record<number, { x: number; y: number }>>({})
 
   const activeProject = useMemo(
     () => projects.find((project) => project.id === activeProjectId) ?? null,
@@ -1313,6 +1971,12 @@ function App() {
       activeChapter.versions[0]
     )
   }, [activeChapter])
+  const chaptersRef = useRef<Chapter[]>(chapters)
+  const activeChapterRef = useRef<Chapter | undefined>(activeChapter)
+  const activeVersionRef = useRef<Version | null>(activeVersion)
+  const activeVersionWritingMode: WritingMode =
+    activeVersion?.writingMode === 'script' ? 'script' : 'novel'
+  const activeVersionWritingModeRef = useRef<WritingMode>(activeVersionWritingMode)
   const currentDraft = activeVersion?.draft ?? ''
   const currentVersionHistory = activeVersion?.history ?? []
   const orderedVersionHistory = useMemo(
@@ -1344,6 +2008,13 @@ function App() {
         : '立即连接'
   const currentSessionKey =
     activeChapter && activeVersion ? `${activeChapter.id}:${activeVersion.id}` : ''
+
+  useEffect(() => {
+    roleRelationsRef.current = roleRelations
+  }, [roleRelations])
+  useEffect(() => {
+    backupRelationsRef.current = backupRelations
+  }, [backupRelations])
   const currentSessionId = currentSessionKey ? (sessionMap[currentSessionKey] ?? '') : ''
   const chapterVersions = activeChapter?.versions ?? EMPTY_VERSIONS
   const deleteProjectExpectedName = pendingDeleteProject?.name.trim() ?? ''
@@ -1362,6 +2033,24 @@ function App() {
       ? chapterVersions.filter((version) => visibleVersionSet.has(version.id))
       : chapterVersions
   const overflowVersions = chapterVersions.filter((version) => overflowVersionSet.has(version.id))
+
+  useEffect(() => {
+    if (writingMode === activeVersionWritingMode) return
+    setWritingMode(activeVersionWritingMode)
+  }, [activeVersionWritingMode, writingMode])
+  useEffect(() => {
+    chaptersRef.current = chapters
+  }, [chapters])
+  useEffect(() => {
+    activeChapterRef.current = activeChapter
+    activeVersionRef.current = activeVersion
+  }, [activeChapter, activeVersion])
+  useEffect(() => {
+    activeVersionWritingModeRef.current = activeVersionWritingMode
+    if (activeVersionWritingMode !== 'script') {
+      setScriptRolePicker(null)
+    }
+  }, [activeVersionWritingMode])
   const isOverflowMenuVisible = isOverflowMenuOpen && overflowVersions.length > 0
   const installedSkillsCount = useMemo(
     () => skillCatalog.filter((skill) => skill.installed).length,
@@ -1398,7 +2087,9 @@ function App() {
     const scoped = memory.filter((item) => item.kind === memoryModule)
     if (!keyword) return scoped
     return scoped.filter((item) => {
-      const haystack = `${item.text}\n${item.roleName ?? ''}\n${item.roleNote ?? ''}\n${item.chapterTitle}\n${item.versionTitle}`.toLowerCase()
+      const haystack = `${item.text}\n${item.roleName ?? ''}\n${item.roleNote ?? ''}${
+        item.kind === 'role' ? '' : `\n${item.chapterTitle}\n${item.versionTitle}`
+      }`.toLowerCase()
       return haystack.includes(keyword)
     })
   }, [memory, memorySearchQuery, memoryModule])
@@ -1406,19 +2097,100 @@ function App() {
     () => memory.filter((item) => item.kind === 'role'),
     [memory]
   )
+  const roleMemoryById = useMemo(() => {
+    const map = new Map<number, MemoryItem>()
+    allRoleMemory.forEach((item) => {
+      map.set(item.id, item)
+    })
+    return map
+  }, [allRoleMemory])
+  const roleMemoryByNormalizedName = useMemo(() => {
+    const map = new Map<string, MemoryItem>()
+    allRoleMemory.forEach((item) => {
+      const normalized = normalizeScriptRoleName(getRoleName(item)).toLowerCase()
+      if (!normalized) return
+      if (!map.has(normalized)) {
+        map.set(normalized, item)
+      }
+    })
+    return map
+  }, [allRoleMemory])
   const visibleRoleMemory = useMemo(
     () => filteredMemory.filter((item) => item.kind === 'role'),
     [filteredMemory]
   )
-  const roleNameById = useMemo(() => {
-    const map = new Map<number, string>()
-    for (const role of allRoleMemory) {
-      const parsed = parseLegacyRoleText(role.text)
-      const name = (role.roleName?.trim() || parsed.roleName || `角色${role.id}`).trim()
-      map.set(role.id, name)
-    }
-    return map
+  useEffect(() => {
+    const next = new Set<string>()
+    allRoleMemory.forEach((item) => {
+      const normalized = normalizeScriptRoleName(getRoleName(item))
+      if (!normalized || isNarratorLabel(normalized)) return
+      next.add(normalized)
+    })
+    trackedScriptRoleNamesRef.current = next
+    scheduleScriptLineDecorations()
   }, [allRoleMemory])
+  useEffect(() => {
+    if (isWorkspaceBootstrapping) return
+    setMemory((previous) => {
+      const seen = new Map<string, number>()
+      const duplicateRoleIdMap = new Map<number, number>()
+      let changed = false
+      const next = previous.filter((item) => {
+        if (item.kind !== 'role') return true
+        const key = normalizeScriptRoleName(getRoleName(item)).toLowerCase()
+        if (!key) return true
+        const existingId = seen.get(key)
+        if (typeof existingId === 'number') {
+          duplicateRoleIdMap.set(item.id, existingId)
+          changed = true
+          return false
+        }
+        seen.set(key, item.id)
+        return true
+      })
+      if (!changed) return previous
+      setRoleRelations((prevRelations) => {
+        const relationKeySet = new Set<string>()
+        return prevRelations
+          .map((relation) => {
+            const fromMemoryId = duplicateRoleIdMap.get(relation.fromMemoryId) ?? relation.fromMemoryId
+            const toMemoryId = duplicateRoleIdMap.get(relation.toMemoryId) ?? relation.toMemoryId
+            if (fromMemoryId === toMemoryId) return null
+            const nextRelation: RoleRelation = {
+              ...relation,
+              fromMemoryId,
+              toMemoryId,
+              strokeColor: normalizeRelationColor(
+                relation.strokeColor,
+                DEFAULT_ROLE_RELATION_STROKE_COLOR
+              ),
+              intimacy: normalizeRelationIntimacy(relation.intimacy ?? 0),
+              tags: Array.isArray(relation.tags) ? [...new Set(relation.tags.filter(Boolean))].slice(0, 12) : []
+            }
+            const dedupeKey = `${fromMemoryId}:${toMemoryId}:${nextRelation.mode}:${nextRelation.relation.trim()}:${nextRelation.intimacy}:${nextRelation.tags.join('|')}:${nextRelation.strokeColor}`
+            if (relationKeySet.has(dedupeKey)) return null
+            relationKeySet.add(dedupeKey)
+            return nextRelation
+          })
+          .filter((item): item is RoleRelation => item !== null)
+      })
+      setStatus('已合并重复角色')
+      return next
+    })
+  }, [isWorkspaceBootstrapping, memory])
+  const scriptRolePickerOptions = useMemo(() => {
+    const names = new Set<string>(['旁白'])
+    allRoleMemory.forEach((item) => {
+      const name = getRoleName(item).trim()
+      if (name) names.add(name)
+    })
+    if (activeVersionWritingMode === 'script') {
+      parseScriptLinePrefixes(currentDraft).forEach((prefix) => {
+        if (prefix.normalizedName) names.add(prefix.normalizedName)
+      })
+    }
+    return [...names].sort((a, b) => a.localeCompare(b, 'zh-CN'))
+  }, [allRoleMemory, activeVersionWritingMode, currentDraft])
   const visibleRoleIds = useMemo(
     () => new Set(visibleRoleMemory.map((item) => item.id)),
     [visibleRoleMemory]
@@ -1431,6 +2203,26 @@ function App() {
       ),
     [roleRelations, visibleRoleIds]
   )
+  const roleRelationPreviewLines = useMemo(() => {
+    return roleRelations
+      .map((relation) => {
+        const from = roleMemoryById.get(relation.fromMemoryId)
+        const to = roleMemoryById.get(relation.toMemoryId)
+        if (!from || !to) return ''
+        const fromName = getRoleName(from)
+        const toName = getRoleName(to)
+        const fromStance = getRoleStance(from)
+        const toStance = getRoleStance(to)
+        const relationText = getRoleRelationDisplayText(relation)
+        const tags = Array.isArray(relation.tags) && relation.tags.length > 0 ? `；标签：${relation.tags.join('、')}` : ''
+        const intimacy = normalizeRelationIntimacy(relation.intimacy ?? 0)
+        if (isRoleRelationBidirectional(parseRoleRelationMode(relation.mode))) {
+          return `${fromName}（立场 ${fromStance}/10-${getRoleStanceLabel(fromStance)}） 与 ${toName}（立场 ${toStance}/10-${getRoleStanceLabel(toStance)}）互为 ${relationText}（亲密度 ${intimacy}，${getRoleIntimacyLabel(intimacy)}${tags ? `${tags}` : ''}）`
+        }
+        return `${fromName}（立场 ${fromStance}/10-${getRoleStanceLabel(fromStance)}） → ${toName}（立场 ${toStance}/10-${getRoleStanceLabel(toStance)}）：${relationText}（亲密度 ${intimacy}，${getRoleIntimacyLabel(intimacy)}${tags ? `${tags}` : ''}）`
+      })
+      .filter(Boolean)
+  }, [roleRelations, roleMemoryById])
   const visibleRolePositionById = useMemo(() => {
     const map = new Map<number, { x: number; y: number }>()
     visibleRoleMemory.forEach((item, index) => {
@@ -1439,6 +2231,11 @@ function App() {
     return map
   }, [visibleRoleMemory])
   const isRoleGraphActive = activeScreen === 'writer' && memoryModule === 'role' && roleGraphView === 'graph'
+  const isRoleGraphBoardFullscreen =
+    isRoleGraphFullscreen &&
+    typeof document !== 'undefined' &&
+    document.fullscreenElement === roleGraphBoardRef.current
+  const shouldRenderRoleDialogsInsideGraph = isRoleGraphActive && isRoleGraphBoardFullscreen
   const roleGraphGridSize = Math.max(8, 24 * roleGraphViewport.scale)
   const roleGraphGridOffsetX =
     ((roleGraphViewport.x % roleGraphGridSize) + roleGraphGridSize) % roleGraphGridSize
@@ -1447,11 +2244,36 @@ function App() {
   const roleGraphBoardStyle: CSSProperties = {
     '--role-graph-grid-size': `${roleGraphGridSize}px`,
     '--role-graph-grid-offset-x': `${roleGraphGridOffsetX}px`,
-    '--role-graph-grid-offset-y': `${roleGraphGridOffsetY}px`
+    '--role-graph-grid-offset-y': `${roleGraphGridOffsetY}px`,
+    '--role-graph-bg-color': roleGraphVisual.backgroundColor,
+    '--role-graph-font-size': `${roleGraphVisual.fontSize}px`,
+    '--role-graph-dim-opacity': `${roleGraphVisual.dimmedOpacity}`
   } as CSSProperties
   const roleGraphViewportStyle: CSSProperties = {
     transform: `translate(${roleGraphViewport.x}px, ${roleGraphViewport.y}px) scale(${roleGraphViewport.scale})`
   }
+  const roleSelectionBounds = useMemo(
+    () =>
+      roleSelectionBox
+        ? getRoleSelectionBounds(roleSelectionBox.start, roleSelectionBox.current)
+        : null,
+    [roleSelectionBox]
+  )
+  const focusedRoleId = useMemo(() => {
+    if (selectedRoleIds.size !== 1) return null
+    return Array.from(selectedRoleIds)[0] ?? null
+  }, [selectedRoleIds])
+  const directlyConnectedRoleIds = useMemo(() => {
+    const connected = new Set<number>()
+    if (focusedRoleId === null) return connected
+    connected.add(focusedRoleId)
+    visibleRoleRelations.forEach((relation) => {
+      if (relation.fromMemoryId === focusedRoleId) connected.add(relation.toMemoryId)
+      if (relation.toMemoryId === focusedRoleId) connected.add(relation.fromMemoryId)
+    })
+    return connected
+  }, [focusedRoleId, visibleRoleRelations])
+  const shouldDimRoleGraph = focusedRoleId !== null
   const filteredBackups = useMemo(() => {
     const keyword = backupSearchQuery.trim().toLowerCase()
     if (!keyword) return backups
@@ -1460,6 +2282,58 @@ function App() {
       return haystack.includes(keyword)
     })
   }, [backups, backupSearchQuery])
+  const visibleBackupIds = useMemo(
+    () => new Set(filteredBackups.map((item) => item.id)),
+    [filteredBackups]
+  )
+  const visibleBackupRelations = useMemo(
+    () =>
+      backupRelations.filter(
+        (relation) =>
+          visibleBackupIds.has(relation.fromBackupId) && visibleBackupIds.has(relation.toBackupId)
+      ),
+    [backupRelations, visibleBackupIds]
+  )
+  const directlyConnectedBackupIds = useMemo(() => {
+    const connected = new Set<number>()
+    if (selectedBackupId === null) return connected
+    connected.add(selectedBackupId)
+    visibleBackupRelations.forEach((relation) => {
+      if (relation.fromBackupId === selectedBackupId) connected.add(relation.toBackupId)
+      if (relation.toBackupId === selectedBackupId) connected.add(relation.fromBackupId)
+    })
+    return connected
+  }, [selectedBackupId, visibleBackupRelations])
+  const shouldDimBackupGraph = selectedBackupId !== null
+  const backupPositionById = useMemo(() => {
+    const map = new Map<number, { x: number; y: number }>()
+    filteredBackups.forEach((item, index) => {
+      map.set(item.id, getBackupNodePosition(item, index))
+    })
+    return map
+  }, [filteredBackups])
+  const isBackupGraphActive =
+    activeScreen === 'writer' && activePanel === 'backup' && backupGraphView === 'graph'
+  const isBackupGraphBoardFullscreen =
+    isBackupGraphFullscreen &&
+    typeof document !== 'undefined' &&
+    document.fullscreenElement === backupGraphBoardRef.current
+  const backupGraphGridSize = Math.max(8, 24 * backupGraphViewport.scale)
+  const backupGraphGridOffsetX =
+    ((backupGraphViewport.x % backupGraphGridSize) + backupGraphGridSize) % backupGraphGridSize
+  const backupGraphGridOffsetY =
+    ((backupGraphViewport.y % backupGraphGridSize) + backupGraphGridSize) % backupGraphGridSize
+  const backupGraphBoardStyle: CSSProperties = {
+    '--backup-graph-grid-size': `${backupGraphGridSize}px`,
+    '--backup-graph-grid-offset-x': `${backupGraphGridOffsetX}px`,
+    '--backup-graph-grid-offset-y': `${backupGraphGridOffsetY}px`,
+    '--backup-graph-bg-color': backupGraphVisual.backgroundColor,
+    '--backup-graph-font-size': `${backupGraphVisual.fontSize}px`,
+    '--backup-graph-dim-opacity': `${backupGraphVisual.dimmedOpacity}`
+  } as CSSProperties
+  const backupGraphViewportStyle: CSSProperties = {
+    transform: `translate(${backupGraphViewport.x}px, ${backupGraphViewport.y}px) scale(${backupGraphViewport.scale})`
+  }
   const railLabelByChapterId = useMemo(() => {
     let chapterSeq = 0
     const labelMap = new Map<number, string>()
@@ -1506,6 +2380,15 @@ function App() {
     }
   }
 
+  function getBackupNodePosition(item: BackupItem, index: number) {
+    const defaultX = 28 + (index % 2) * 276
+    const defaultY = 28 + Math.floor(index / 2) * 170
+    return {
+      x: Number.isFinite(item.backupX as number) ? (item.backupX as number) : defaultX,
+      y: Number.isFinite(item.backupY as number) ? (item.backupY as number) : defaultY
+    }
+  }
+
   function getRoleGraphPointFromClient(clientX: number, clientY: number) {
     const board = roleGraphBoardRef.current
     if (!board) return null
@@ -1513,6 +2396,16 @@ function App() {
     return {
       x: (clientX - rect.left - roleGraphViewport.x) / roleGraphViewport.scale,
       y: (clientY - rect.top - roleGraphViewport.y) / roleGraphViewport.scale
+    }
+  }
+
+  function getBackupGraphPointFromClient(clientX: number, clientY: number) {
+    const board = backupGraphBoardRef.current
+    if (!board) return null
+    const rect = board.getBoundingClientRect()
+    return {
+      x: (clientX - rect.left - backupGraphViewport.x) / backupGraphViewport.scale,
+      y: (clientY - rect.top - backupGraphViewport.y) / backupGraphViewport.scale
     }
   }
 
@@ -1538,7 +2431,224 @@ function App() {
     return null
   }
 
-  function centerRoleGraphToNodes() {
+  function getBackupLinkTargetByPoint(
+    point: { x: number; y: number },
+    ignoreBackupId: number
+  ): { backupId: number; side: RoleLinkSide } | null {
+    const detectionMargin = 18
+    for (const item of filteredBackups) {
+      if (item.id === ignoreBackupId) continue
+      const position = backupPositionById.get(item.id) ?? getBackupNodePosition(item, 0)
+      const minX = position.x - detectionMargin
+      const maxX = position.x + BACKUP_NODE_WIDTH + detectionMargin
+      const minY = position.y - detectionMargin
+      const maxY = position.y + BACKUP_NODE_HEIGHT + detectionMargin
+      if (point.x < minX || point.x > maxX || point.y < minY || point.y > maxY) continue
+      return {
+        backupId: item.id,
+        side: pickBackupSideForPoint(position, point)
+      }
+    }
+    return null
+  }
+
+  function getRoleRelationGeometry(relation: RoleRelation) {
+    const fromPos = visibleRolePositionById.get(relation.fromMemoryId)
+    const toPos = visibleRolePositionById.get(relation.toMemoryId)
+    if (!fromPos || !toPos) return null
+    const fromAnchor = relation.fromAnchor ?? pickDefaultRoleSide(toPos, fromPos)
+    const toAnchor = relation.toAnchor ?? pickDefaultRoleSide(fromPos, toPos)
+    const fromPoint = getRoleSidePoint(fromPos, fromAnchor)
+    const toPoint = getRoleSidePoint(toPos, toAnchor)
+    const controlPoint = getRoleRelationControlPoint(fromPoint, toPoint, relation)
+    const curveMidPoint = getQuadraticBezierPoint(fromPoint, controlPoint, toPoint, 0.5)
+    const path = `M ${fromPoint.x} ${fromPoint.y} Q ${controlPoint.x} ${controlPoint.y} ${toPoint.x} ${toPoint.y}`
+    return {
+      fromAnchor,
+      toAnchor,
+      fromPoint,
+      toPoint,
+      controlPoint,
+      curveMidPoint,
+      path
+    }
+  }
+
+  function getRoleRelationCurveOffsetFromMidpoint(
+    targetMid: { x: number; y: number },
+    fromPoint: { x: number; y: number },
+    toPoint: { x: number; y: number }
+  ) {
+    const straightMidX = (fromPoint.x + toPoint.x) / 2
+    const straightMidY = (fromPoint.y + toPoint.y) / 2
+    return {
+      x: (targetMid.x - straightMidX) * 2,
+      y: (targetMid.y - straightMidY) * 2
+    }
+  }
+
+  function getBackupRelationGeometry(relation: BackupRelation) {
+    const fromPos = backupPositionById.get(relation.fromBackupId)
+    const toPos = backupPositionById.get(relation.toBackupId)
+    if (!fromPos || !toPos) return null
+    const fromAnchor = relation.fromAnchor ?? pickDefaultBackupSide(toPos, fromPos)
+    const toAnchor = relation.toAnchor ?? pickDefaultBackupSide(fromPos, toPos)
+    const fromPoint = getBackupSidePoint(fromPos, fromAnchor)
+    const toPoint = getBackupSidePoint(toPos, toAnchor)
+    const controlPoint = {
+      x:
+        (fromPoint.x + toPoint.x) / 2 +
+        (Number.isFinite(relation.curveOffsetX as number) ? (relation.curveOffsetX as number) : 0),
+      y:
+        (fromPoint.y + toPoint.y) / 2 +
+        (Number.isFinite(relation.curveOffsetY as number) ? (relation.curveOffsetY as number) : 0)
+    }
+    const curveMidPoint = getQuadraticBezierPoint(fromPoint, controlPoint, toPoint, 0.5)
+    const path = `M ${fromPoint.x} ${fromPoint.y} Q ${controlPoint.x} ${controlPoint.y} ${toPoint.x} ${toPoint.y}`
+    return {
+      fromAnchor,
+      toAnchor,
+      fromPoint,
+      toPoint,
+      controlPoint,
+      curveMidPoint,
+      path
+    }
+  }
+
+  function getBackupRelationCurveOffsetFromMidpoint(
+    targetMid: { x: number; y: number },
+    fromPoint: { x: number; y: number },
+    toPoint: { x: number; y: number }
+  ) {
+    const straightMidX = (fromPoint.x + toPoint.x) / 2
+    const straightMidY = (fromPoint.y + toPoint.y) / 2
+    return {
+      x: (targetMid.x - straightMidX) * 2,
+      y: (targetMid.y - straightMidY) * 2
+    }
+  }
+
+  function beginRoleRelationCurveDrag(event: ReactMouseEvent<SVGCircleElement>, relationId: number) {
+    if (event.button !== 0) return
+    if (isRoleGraphSpacePressed || isRoleGraphPanning) return
+    event.preventDefault()
+    event.stopPropagation()
+    const pointer = getRoleGraphPointFromClient(event.clientX, event.clientY)
+    if (!pointer) return
+    setRoleRelationMenu({ open: false, x: 0, y: 0, relationId: null })
+    setRoleNodeMenu({ open: false, x: 0, y: 0, roleId: null })
+    setDraggingRoleId(null)
+    setRoleLinkStart(null)
+    setRoleLinkTarget(null)
+    setRoleLinkPreview(null)
+    setDraggingRoleRelationCurve({ relationId })
+  }
+
+  function getRoleSelectionBounds(
+    start: { x: number; y: number },
+    current: { x: number; y: number }
+  ) {
+    const minX = Math.min(start.x, current.x)
+    const minY = Math.min(start.y, current.y)
+    const maxX = Math.max(start.x, current.x)
+    const maxY = Math.max(start.y, current.y)
+    return {
+      minX,
+      minY,
+      maxX,
+      maxY,
+      width: maxX - minX,
+      height: maxY - minY
+    }
+  }
+
+  function collectRoleIdsInBounds(bounds: {
+    minX: number
+    minY: number
+    maxX: number
+    maxY: number
+  }) {
+    const ids: number[] = []
+    for (const item of visibleRoleMemory) {
+      const position = visibleRolePositionById.get(item.id) ?? getRoleNodePosition(item, 0)
+      const nodeMinX = position.x
+      const nodeMinY = position.y
+      const nodeMaxX = position.x + ROLE_NODE_WIDTH
+      const nodeMaxY = position.y + ROLE_NODE_HEIGHT
+      const intersects =
+        bounds.maxX >= nodeMinX &&
+        bounds.minX <= nodeMaxX &&
+        bounds.maxY >= nodeMinY &&
+        bounds.minY <= nodeMaxY
+      if (intersects) ids.push(item.id)
+    }
+    return ids
+  }
+
+  function applyRoleSelectionByBox(box: {
+    start: { x: number; y: number }
+    current: { x: number; y: number }
+    additive: boolean
+    baseSelectedIds: number[]
+  }) {
+    const bounds = getRoleSelectionBounds(box.start, box.current)
+    const idsInBounds = collectRoleIdsInBounds(bounds)
+    const next = new Set<number>(box.additive ? box.baseSelectedIds : [])
+    idsInBounds.forEach((id) => next.add(id))
+    setSelectedRoleIds(next)
+  }
+
+  function deleteRoleMemories(roleIds: number[]) {
+    const uniqueIds = [...new Set(roleIds)]
+    if (!uniqueIds.length) return
+    const roleIdSet = new Set(uniqueIds)
+    setMemory((previous) =>
+      previous.filter((item) => !(item.kind === 'role' && roleIdSet.has(item.id)))
+    )
+    const nextRelations = roleRelationsRef.current.filter(
+      (relation) =>
+        !roleIdSet.has(relation.fromMemoryId) && !roleIdSet.has(relation.toMemoryId)
+    )
+    setRoleRelations(nextRelations)
+    roleRelationsRef.current = nextRelations
+    persistWorkspaceWithRoleRelations(nextRelations)
+    setSelectedRoleIds((previous) => {
+      if (!previous.size) return previous
+      const next = new Set<number>()
+      previous.forEach((id) => {
+        if (!roleIdSet.has(id)) next.add(id)
+      })
+      return next
+    })
+    setRoleSelectionBox(null)
+    setRoleNodeMenu({ open: false, x: 0, y: 0, roleId: null })
+    setRoleRelationMenu({ open: false, x: 0, y: 0, relationId: null })
+    setRoleRelationEditorDialog((previous) =>
+      previous && nextRelations.some((item) => item.id === previous.relationId) ? previous : null
+    )
+    setRoleEditorDialog((previous) =>
+      previous && roleIdSet.has(previous.roleId) ? null : previous
+    )
+    setStatus(`已删除 ${uniqueIds.length} 个角色`)
+  }
+
+  function openRoleNodeContextMenu(event: ReactMouseEvent<HTMLElement>, roleId: number) {
+    event.preventDefault()
+    event.stopPropagation()
+    setRoleRelationMenu({ open: false, x: 0, y: 0, relationId: null })
+    if (!selectedRoleIds.has(roleId)) {
+      setSelectedRoleIds(new Set([roleId]))
+    }
+    setRoleNodeMenu({
+      open: true,
+      x: event.clientX,
+      y: event.clientY,
+      roleId
+    })
+  }
+
+  function centerRoleGraphToNodes(mode: 'fit' | 'one-to-one' = 'fit') {
     const board = roleGraphBoardRef.current
     if (!board) return
     if (!visibleRoleMemory.length) {
@@ -1569,14 +2679,63 @@ function App() {
       (boardWidth - padding * 2) / boundsWidth,
       (boardHeight - padding * 2) / boundsHeight
     )
+    const desiredScale =
+      mode === 'one-to-one'
+        ? 1
+        : Math.min(1, Number.isFinite(fitScale) ? fitScale : 1)
     const nextScale = clampNumber(
-      Math.min(1, Number.isFinite(fitScale) ? fitScale : 1),
+      desiredScale,
       ROLE_GRAPH_MIN_SCALE,
       ROLE_GRAPH_MAX_SCALE
     )
     const nextX = (boardWidth - boundsWidth * nextScale) / 2 - minX * nextScale
     const nextY = (boardHeight - boundsHeight * nextScale) / 2 - minY * nextScale
     setRoleGraphViewport({
+      x: Number.isFinite(nextX) ? nextX : 0,
+      y: Number.isFinite(nextY) ? nextY : 0,
+      scale: Number.isFinite(nextScale) ? nextScale : 1
+    })
+  }
+
+  function centerBackupGraphToNodes(mode: 'fit' | 'one-to-one' = 'fit') {
+    const board = backupGraphBoardRef.current
+    if (!board) return
+    if (!filteredBackups.length) {
+      setBackupGraphViewport({ x: 0, y: 0, scale: 1 })
+      return
+    }
+    let minX = Number.POSITIVE_INFINITY
+    let minY = Number.POSITIVE_INFINITY
+    let maxX = Number.NEGATIVE_INFINITY
+    let maxY = Number.NEGATIVE_INFINITY
+    filteredBackups.forEach((item, index) => {
+      const position = backupPositionById.get(item.id) ?? getBackupNodePosition(item, index)
+      minX = Math.min(minX, position.x)
+      minY = Math.min(minY, position.y)
+      maxX = Math.max(maxX, position.x + BACKUP_NODE_WIDTH)
+      maxY = Math.max(maxY, position.y + BACKUP_NODE_HEIGHT)
+    })
+    if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
+      setBackupGraphViewport({ x: 0, y: 0, scale: 1 })
+      return
+    }
+    const boardWidth = Math.max(1, board.clientWidth)
+    const boardHeight = Math.max(1, board.clientHeight)
+    const padding = 32
+    const boundsWidth = Math.max(1, maxX - minX)
+    const boundsHeight = Math.max(1, maxY - minY)
+    const fitScale = Math.min(
+      (boardWidth - padding * 2) / boundsWidth,
+      (boardHeight - padding * 2) / boundsHeight
+    )
+    const desiredScale =
+      mode === 'one-to-one'
+        ? 1
+        : Math.min(1, Number.isFinite(fitScale) ? fitScale : 1)
+    const nextScale = clampNumber(desiredScale, ROLE_GRAPH_MIN_SCALE, ROLE_GRAPH_MAX_SCALE)
+    const nextX = (boardWidth - boundsWidth * nextScale) / 2 - minX * nextScale
+    const nextY = (boardHeight - boundsHeight * nextScale) / 2 - minY * nextScale
+    setBackupGraphViewport({
       x: Number.isFinite(nextX) ? nextX : 0,
       y: Number.isFinite(nextY) ? nextY : 0,
       scale: Number.isFinite(nextScale) ? nextScale : 1
@@ -1590,12 +2749,16 @@ function App() {
       writingMode,
       memory,
       roleRelations,
+      roleRelationTagOptions,
+      backupRelations,
       backups,
       config,
       customPrompt,
       skillsPrompt,
       sessionMap,
-      skillModelName
+      skillModelName,
+      roleGraphVisual,
+      backupGraphVisual
     }
   }
 
@@ -1605,12 +2768,16 @@ function App() {
     setWritingMode(snapshot.writingMode)
     setMemory(snapshot.memory)
     setRoleRelations(snapshot.roleRelations)
+    setRoleRelationTagOptions(normalizeRoleRelationTagOptions(snapshot.roleRelationTagOptions))
+    setBackupRelations(snapshot.backupRelations)
     setBackups(snapshot.backups)
     setConfig(snapshot.config)
     setCustomPrompt(snapshot.customPrompt)
     setSkillsPrompt(snapshot.skillsPrompt)
     setSessionMap(snapshot.sessionMap)
     setSkillModelName(snapshot.skillModelName)
+    setRoleGraphVisual(snapshot.roleGraphVisual)
+    setBackupGraphVisual(snapshot.backupGraphVisual)
     setActivePanel('memory')
     setResult('')
     setError('')
@@ -1618,19 +2785,80 @@ function App() {
     setMemorySearchQuery('')
     setMemoryModule('info')
     setRoleGraphView('list')
+    setIsRoleGraphVisualDialogOpen(false)
     setRoleGraphViewport({ x: 0, y: 0, scale: 1 })
     setIsRoleGraphSpacePressed(false)
     setIsRoleGraphPanning(false)
     roleGraphPanStartRef.current = null
     setRoleEditorDialog(null)
+    setRoleRelationEditorDialog(null)
+    setHoveredRoleRelationId(null)
+    setDraggingRoleRelationCurve(null)
+    setSelectedRoleIds(new Set())
+    setRoleSelectionBox(null)
+    setRoleNodeMenu({ open: false, x: 0, y: 0, roleId: null })
     setDraggingRoleId(null)
+    roleDragIdsRef.current = []
+    roleDragOffsetsByIdRef.current = {}
     setHoveredRoleId(null)
     setRoleLinkStart(null)
     setRoleLinkTarget(null)
     setRoleLinkPreview(null)
     setRoleRelationMenu({ open: false, x: 0, y: 0, relationId: null })
+    setActiveRoleRelationMode(DEFAULT_ROLE_RELATION_MODE)
+    setActiveRoleRelationStrokeColor(DEFAULT_ROLE_RELATION_STROKE_COLOR)
+    setBackupGraphView('list')
+    setIsBackupGraphVisualDialogOpen(false)
+    setBackupActiveRelationMode(DEFAULT_ROLE_RELATION_MODE)
+    setBackupActiveRelationStrokeColor(DEFAULT_BACKUP_RELATION_STROKE_COLOR)
+    setBackupActiveRelationLabelColor(DEFAULT_BACKUP_RELATION_LABEL_COLOR)
+    setDraggingBackupId(null)
+    setHoveredBackupId(null)
+    setSelectedBackupId(null)
+    setBackupLinkStart(null)
+    setBackupLinkTarget(null)
+    setBackupLinkPreview(null)
+    setHoveredBackupRelationId(null)
+    setDraggingBackupRelationCurve(null)
+    setBackupRelationEditorDialog(null)
+    setBackupRelationMenu({ open: false, x: 0, y: 0, relationId: null })
+    setBackupNodeMenu({ open: false, x: 0, y: 0, backupId: null })
+    setBackupEditorDialog(null)
     setBackupSearchQuery('')
+    setIsBackupGraphFullscreen(false)
+    setBackupGraphViewport({ x: 0, y: 0, scale: 1 })
+    setIsBackupGraphSpacePressed(false)
+    setIsBackupGraphPanning(false)
+    backupGraphPanStartRef.current = null
     setIsAdvancedSettingsOpen(false)
+  }
+
+  function persistWorkspaceWithRoleRelations(nextRoleRelations: RoleRelation[]) {
+    if (isWorkspaceBootstrapping) return
+    if (activeScreen !== 'writer') return
+    if (!activeProjectId) return
+    const snapshot: NormalizedWorkspace = {
+      chapters,
+      activeChapterId,
+      writingMode,
+      memory,
+      roleRelations: nextRoleRelations,
+      roleRelationTagOptions,
+      backupRelations,
+      backups,
+      config,
+      customPrompt,
+      skillsPrompt,
+      sessionMap,
+      skillModelName,
+      roleGraphVisual,
+      backupGraphVisual
+    }
+    saveProjectWorkspace(activeProjectId, snapshot)
+    const currentProject = projects.find((item) => item.id === activeProjectId)
+    if (currentProject) {
+      void syncProjectPackageToDisk(currentProject.id, currentProject.name, snapshot)
+    }
   }
 
   async function syncProjectsIndexToDisk(nextProjects: ProjectMeta[]) {
@@ -2215,18 +3443,72 @@ function App() {
       void syncProjectsIndexToDisk(nextProjects)
     }
   }, [
+    activeScreen,
     activeProjectId,
     chapters,
     activeChapterId,
     memory,
     roleRelations,
+    roleRelationTagOptions,
+    backupRelations,
     backups,
     config,
     customPrompt,
     skillsPrompt,
     sessionMap,
     skillModelName,
+    roleGraphVisual,
+    backupGraphVisual,
+    isWorkspaceBootstrapping
+  ])
+
+  useEffect(() => {
+    if (isWorkspaceBootstrapping) return
+    if (activeScreen !== 'writer') return
+    if (!activeProjectId) return
+
+    const persistNow = () => {
+      const snapshot = buildWorkspaceSnapshot()
+      saveProjectWorkspace(activeProjectId, snapshot)
+      const currentProject = projects.find((item) => item.id === activeProjectId)
+      if (currentProject) {
+        void syncProjectPackageToDisk(currentProject.id, currentProject.name, snapshot)
+      }
+    }
+
+    const onBeforeUnload = () => {
+      persistNow()
+    }
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== 'hidden') return
+      persistNow()
+    }
+
+    window.addEventListener('beforeunload', onBeforeUnload)
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      window.removeEventListener('beforeunload', onBeforeUnload)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
+  }, [
     activeScreen,
+    activeProjectId,
+    projects,
+    chapters,
+    activeChapterId,
+    memory,
+    roleRelations,
+    roleRelationTagOptions,
+    backupRelations,
+    backups,
+    config,
+    customPrompt,
+    skillsPrompt,
+    sessionMap,
+    skillModelName,
+    roleGraphVisual,
+    backupGraphVisual,
     isWorkspaceBootstrapping
   ])
 
@@ -2238,12 +3520,19 @@ function App() {
   useEffect(() => {
     if (memoryModule === 'role') return
     setRoleEditorDialog(null)
+    setRoleRelationEditorDialog(null)
+    setHoveredRoleRelationId(null)
+    setDraggingRoleRelationCurve(null)
+    setSelectedRoleIds(new Set())
+    setRoleSelectionBox(null)
+    setRoleNodeMenu({ open: false, x: 0, y: 0, roleId: null })
     setDraggingRoleId(null)
     setHoveredRoleId(null)
     setRoleLinkStart(null)
     setRoleLinkTarget(null)
     setRoleLinkPreview(null)
     setRoleRelationMenu({ open: false, x: 0, y: 0, relationId: null })
+    setIsRoleGraphVisualDialogOpen(false)
     setIsRoleGraphSpacePressed(false)
     setIsRoleGraphPanning(false)
     roleGraphPanStartRef.current = null
@@ -2251,15 +3540,41 @@ function App() {
 
   useEffect(() => {
     if (isRoleGraphActive) return
+    setHoveredRoleRelationId(null)
+    setDraggingRoleRelationCurve(null)
+    setSelectedRoleIds(new Set())
+    setRoleSelectionBox(null)
+    setRoleNodeMenu({ open: false, x: 0, y: 0, roleId: null })
     setHoveredRoleId(null)
+    roleDragIdsRef.current = []
+    roleDragOffsetsByIdRef.current = {}
     setRoleLinkStart(null)
     setRoleLinkTarget(null)
     setRoleLinkPreview(null)
     setRoleRelationMenu({ open: false, x: 0, y: 0, relationId: null })
+    setIsRoleGraphVisualDialogOpen(false)
     setIsRoleGraphSpacePressed(false)
     setIsRoleGraphPanning(false)
     roleGraphPanStartRef.current = null
   }, [isRoleGraphActive])
+
+  useEffect(() => {
+    if (isBackupGraphActive) return
+    setDraggingBackupId(null)
+    setHoveredBackupId(null)
+    setSelectedBackupId(null)
+    setBackupLinkStart(null)
+    setBackupLinkTarget(null)
+    setBackupLinkPreview(null)
+    setHoveredBackupRelationId(null)
+    setDraggingBackupRelationCurve(null)
+    setBackupRelationEditorDialog(null)
+    setBackupRelationMenu({ open: false, x: 0, y: 0, relationId: null })
+    setIsBackupGraphVisualDialogOpen(false)
+    setIsBackupGraphSpacePressed(false)
+    setIsBackupGraphPanning(false)
+    backupGraphPanStartRef.current = null
+  }, [isBackupGraphActive])
 
   useEffect(() => {
     if (!isRoleGraphActive || !isRoleGraphFullscreen) return
@@ -2298,9 +3613,21 @@ function App() {
   }, [isRoleGraphFullscreen])
 
   useEffect(() => {
+    if (isBackupGraphFullscreen) return
+    setIsBackupGraphSpacePressed(false)
+    setIsBackupGraphPanning(false)
+    backupGraphPanStartRef.current = null
+  }, [isBackupGraphFullscreen])
+
+  useEffect(() => {
     if (!isRoleGraphActive || isRoleGraphFullscreen) return
     centerRoleGraphToNodes()
   }, [isRoleGraphActive, isRoleGraphFullscreen, visibleRoleMemory.length])
+
+  useEffect(() => {
+    if (!isBackupGraphActive || isBackupGraphFullscreen) return
+    centerBackupGraphToNodes()
+  }, [isBackupGraphActive, isBackupGraphFullscreen, filteredBackups.length, backupSearchQuery])
 
   useEffect(() => {
     if (!isRoleGraphActive || isRoleGraphFullscreen) return
@@ -2314,6 +3641,78 @@ function App() {
       observer.disconnect()
     }
   }, [isRoleGraphActive, isRoleGraphFullscreen])
+
+  useEffect(() => {
+    if (!isBackupGraphActive || isBackupGraphFullscreen) return
+    const board = backupGraphBoardRef.current
+    if (!board || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => {
+      centerBackupGraphToNodes()
+    })
+    observer.observe(board)
+    return () => {
+      observer.disconnect()
+    }
+  }, [isBackupGraphActive, isBackupGraphFullscreen, backupSearchQuery])
+
+  useEffect(() => {
+    if (!isRoleGraphActive || !isRoleGraphFullscreen) return
+    let raf1 = 0
+    let raf2 = 0
+    raf1 = window.requestAnimationFrame(() => {
+      raf2 = window.requestAnimationFrame(() => {
+        centerRoleGraphToNodes('one-to-one')
+      })
+    })
+    return () => {
+      if (raf1) window.cancelAnimationFrame(raf1)
+      if (raf2) window.cancelAnimationFrame(raf2)
+    }
+  }, [isRoleGraphActive, isRoleGraphFullscreen])
+
+  useEffect(() => {
+    if (!isBackupGraphActive || !isBackupGraphFullscreen) return
+    let raf1 = 0
+    let raf2 = 0
+    raf1 = window.requestAnimationFrame(() => {
+      raf2 = window.requestAnimationFrame(() => {
+        centerBackupGraphToNodes('one-to-one')
+      })
+    })
+    return () => {
+      if (raf1) window.cancelAnimationFrame(raf1)
+      if (raf2) window.cancelAnimationFrame(raf2)
+    }
+  }, [isBackupGraphActive, isBackupGraphFullscreen])
+
+  useEffect(() => {
+    if (!isBackupGraphActive || !isBackupGraphFullscreen) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.code !== 'Space') return
+      if (isTypingTarget(event.target)) return
+      event.preventDefault()
+      setIsBackupGraphSpacePressed(true)
+    }
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (event.code !== 'Space') return
+      setIsBackupGraphSpacePressed(false)
+      setIsBackupGraphPanning(false)
+      backupGraphPanStartRef.current = null
+    }
+    const onBlur = () => {
+      setIsBackupGraphSpacePressed(false)
+      setIsBackupGraphPanning(false)
+      backupGraphPanStartRef.current = null
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    window.addEventListener('keyup', onKeyUp, true)
+    window.addEventListener('blur', onBlur)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown, true)
+      window.removeEventListener('keyup', onKeyUp, true)
+      window.removeEventListener('blur', onBlur)
+    }
+  }, [isBackupGraphActive, isBackupGraphFullscreen])
 
   useEffect(() => {
     localStorage.setItem(LAST_SCREEN_KEY, activeScreen)
@@ -2496,6 +3895,101 @@ function App() {
   }, [editorContextMenu.open])
 
   useEffect(() => {
+    scheduleScriptLineDecorations()
+  }, [activeVersion?.id, activeVersionWritingMode])
+
+  useEffect(() => {
+    return () => {
+      if (scriptDecorationFrameRef.current !== null) {
+        window.cancelAnimationFrame(scriptDecorationFrameRef.current)
+        scriptDecorationFrameRef.current = null
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!scriptRolePicker) return
+    const timer = window.setTimeout(() => {
+      scriptRolePickerInputRef.current?.focus()
+      scriptRolePickerInputRef.current?.select()
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [scriptRolePicker])
+
+  useEffect(() => {
+    if (!scriptRolePicker) {
+      setScriptRolePickerRoleDraft(null)
+      return
+    }
+    const currentName = normalizeScriptRoleName(
+      scriptRolePicker.query.trim() || scriptRolePicker.currentName || ''
+    ).toLowerCase()
+    const currentRole = roleMemoryByNormalizedName.get(currentName) ?? null
+    if (!currentRole) {
+      setScriptRolePickerRoleDraft(null)
+      return
+    }
+    setScriptRolePickerRoleDraft((previous) => {
+      if (previous && previous.roleId === currentRole.id) return previous
+      return {
+        roleId: currentRole.id,
+        roleName: getRoleName(currentRole),
+        roleNote: getRoleNote(currentRole),
+        roleStance: getRoleStance(currentRole)
+      }
+    })
+  }, [scriptRolePicker, roleMemoryByNormalizedName])
+
+  useEffect(() => {
+    if (!scriptRolePicker) return
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as Node
+      if (scriptRolePickerRef.current?.contains(target)) return
+      closeScriptRolePicker()
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      closeScriptRolePicker()
+    }
+    window.addEventListener('mousedown', onPointerDown)
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => {
+      window.removeEventListener('mousedown', onPointerDown)
+      window.removeEventListener('keydown', onKeyDown, true)
+    }
+  }, [scriptRolePicker])
+
+  useEffect(() => {
+    if (activeScreen !== 'writer') {
+      closeScriptRolePicker()
+    }
+  }, [activeScreen, activeChapterId, activeVersion?.id])
+
+  useEffect(() => {
+    if (activeScreen !== 'writer') return
+    if (activeVersionWritingMode !== 'script') return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey)) return
+      if (event.key.toLowerCase() !== 'a') return
+      const target = event.target
+      if (
+        isTypingTarget(target) &&
+        !(target instanceof HTMLElement && target.closest('.monaco-editor'))
+      ) {
+        return
+      }
+      event.preventDefault()
+      closeEditorContextMenu()
+      closeScriptRolePicker()
+      editorRef.current?.focus()
+      editorRef.current?.trigger('keyboard', 'editor.action.selectAll', null)
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [activeScreen, activeVersionWritingMode])
+
+  useEffect(() => {
     if (!roleRelationMenu.open) return
 
     const closeMenu = () => {
@@ -2519,6 +4013,102 @@ function App() {
       window.removeEventListener('keydown', onKeyDown, true)
     }
   }, [roleRelationMenu.open])
+
+  useEffect(() => {
+    if (!backupRelationMenu.open) return
+
+    const closeMenu = () => {
+      setBackupRelationMenu({ open: false, x: 0, y: 0, relationId: null })
+    }
+    const onPointerDown = (event: MouseEvent) => {
+      if (backupRelationMenuRef.current?.contains(event.target as Node)) return
+      closeMenu()
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        closeMenu()
+      }
+    }
+
+    window.addEventListener('mousedown', onPointerDown)
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => {
+      window.removeEventListener('mousedown', onPointerDown)
+      window.removeEventListener('keydown', onKeyDown, true)
+    }
+  }, [backupRelationMenu.open])
+
+  useEffect(() => {
+    if (!roleNodeMenu.open) return
+
+    const closeMenu = () => {
+      setRoleNodeMenu({ open: false, x: 0, y: 0, roleId: null })
+    }
+    const onPointerDown = (event: MouseEvent) => {
+      if (roleNodeMenuRef.current?.contains(event.target as Node)) return
+      closeMenu()
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        closeMenu()
+      }
+    }
+
+    window.addEventListener('mousedown', onPointerDown)
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => {
+      window.removeEventListener('mousedown', onPointerDown)
+      window.removeEventListener('keydown', onKeyDown, true)
+    }
+  }, [roleNodeMenu.open])
+
+  useEffect(() => {
+    if (!backupNodeMenu.open) return
+
+    const closeMenu = () => {
+      setBackupNodeMenu({ open: false, x: 0, y: 0, backupId: null })
+    }
+    const onPointerDown = (event: MouseEvent) => {
+      if (backupNodeMenuRef.current?.contains(event.target as Node)) return
+      closeMenu()
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        closeMenu()
+      }
+    }
+
+    window.addEventListener('mousedown', onPointerDown)
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => {
+      window.removeEventListener('mousedown', onPointerDown)
+      window.removeEventListener('keydown', onKeyDown, true)
+    }
+  }, [backupNodeMenu.open])
+
+  useEffect(() => {
+    if (!isRoleGraphActive) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Delete') return
+      if (selectedRoleIds.size === 0) return
+      if (isTypingTarget(event.target)) return
+      if (roleEditorDialog || roleRelationEditorDialog) return
+      event.preventDefault()
+      deleteRoleMemories(Array.from(selectedRoleIds))
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown, true)
+    }
+  }, [
+    isRoleGraphActive,
+    selectedRoleIds,
+    roleEditorDialog,
+    roleRelationEditorDialog
+  ])
 
   useEffect(() => {
     if (!window.novelDesktopApi?.listSkills) return
@@ -2551,6 +4141,32 @@ function App() {
 
   const canRunSelectionActions =
     hasSelection || selectedSnippet.trim().length > 0
+  const filteredScriptRolePickerOptions = useMemo(() => {
+    if (!scriptRolePicker) return scriptRolePickerOptions
+    const keyword = scriptRolePicker.query.trim().toLowerCase()
+    if (!keyword) return scriptRolePickerOptions
+    return scriptRolePickerOptions.filter((name) => name.toLowerCase().includes(keyword))
+  }, [scriptRolePicker, scriptRolePickerOptions])
+  const scriptRolePickerCurrentName = normalizeScriptRoleName(
+    scriptRolePicker?.query?.trim() || scriptRolePicker?.currentName || ''
+  )
+  const scriptRolePickerCurrentKey = scriptRolePickerCurrentName.toLowerCase()
+  const scriptRolePickerCurrentRoleMemory =
+    roleMemoryByNormalizedName.get(scriptRolePickerCurrentKey) ?? null
+  const isScriptRolePickerCurrentTracked =
+    !!scriptRolePickerCurrentName && !isNarratorLabel(scriptRolePickerCurrentName) && !!scriptRolePickerCurrentRoleMemory
+  const isScriptRolePickerRoleDraftDirty = useMemo(() => {
+    if (!scriptRolePickerCurrentRoleMemory || !scriptRolePickerRoleDraft) return false
+    if (scriptRolePickerRoleDraft.roleId !== scriptRolePickerCurrentRoleMemory.id) return false
+    const currentName = getRoleName(scriptRolePickerCurrentRoleMemory).trim()
+    const currentNote = getRoleNote(scriptRolePickerCurrentRoleMemory)
+    const currentStance = getRoleStance(scriptRolePickerCurrentRoleMemory)
+    return (
+      scriptRolePickerRoleDraft.roleName.trim() !== currentName ||
+      scriptRolePickerRoleDraft.roleNote !== currentNote ||
+      scriptRolePickerRoleDraft.roleStance !== currentStance
+    )
+  }, [scriptRolePickerCurrentRoleMemory, scriptRolePickerRoleDraft])
   const canDeleteChapter = chapters.length > 1
   const hasSkillsCenter = Boolean(window.novelDesktopApi?.listSkills)
   const hasDesktopOllamaSignin = Boolean(window.novelDesktopApi?.signinOllama)
@@ -2957,6 +4573,7 @@ function App() {
   }, [config.kind, config.baseUrl, config.model, config.apiKey])
 
   useEffect(() => {
+    if (isWorkspaceBootstrapping) return
     const roleIds = new Set(allRoleMemory.map((item) => item.id))
     setRoleRelations((previous) => {
       const filtered = previous.filter(
@@ -2965,12 +4582,41 @@ function App() {
       if (filtered.length === previous.length) return previous
       return filtered
     })
+  }, [allRoleMemory, isWorkspaceBootstrapping])
+
+  useEffect(() => {
+    if (isWorkspaceBootstrapping) return
+    const backupIds = new Set(backups.map((item) => item.id))
+    setBackupRelations((previous) => {
+      const filtered = previous.filter(
+        (relation) =>
+          backupIds.has(relation.fromBackupId) &&
+          backupIds.has(relation.toBackupId) &&
+          relation.fromBackupId !== relation.toBackupId
+      )
+      if (filtered.length === previous.length) return previous
+      return filtered
+    })
+  }, [backups, isWorkspaceBootstrapping])
+
+  useEffect(() => {
+    const roleIds = new Set(allRoleMemory.map((item) => item.id))
+    setSelectedRoleIds((previous) => {
+      if (!previous.size) return previous
+      const next = new Set<number>()
+      previous.forEach((id) => {
+        if (roleIds.has(id)) next.add(id)
+      })
+      return next.size === previous.size ? previous : next
+    })
   }, [allRoleMemory])
 
   useEffect(() => {
     const onFullscreenChange = () => {
-      const board = roleGraphBoardRef.current
-      setIsRoleGraphFullscreen(Boolean(board) && document.fullscreenElement === board)
+      const roleBoard = roleGraphBoardRef.current
+      const backupBoard = backupGraphBoardRef.current
+      setIsRoleGraphFullscreen(Boolean(roleBoard) && document.fullscreenElement === roleBoard)
+      setIsBackupGraphFullscreen(Boolean(backupBoard) && document.fullscreenElement === backupBoard)
     }
     document.addEventListener('fullscreenchange', onFullscreenChange)
     onFullscreenChange()
@@ -2980,7 +4626,15 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (draggingRoleId === null && roleLinkStart === null && !isRoleGraphPanning) return
+    if (
+      draggingRoleId === null &&
+      roleLinkStart === null &&
+      !isRoleGraphPanning &&
+      draggingRoleRelationCurve === null &&
+      roleSelectionBox === null
+    ) {
+      return
+    }
     const onPointerMove = (event: MouseEvent) => {
       if (isRoleGraphPanning) {
         const start = roleGraphPanStartRef.current
@@ -2994,6 +4648,42 @@ function App() {
       }
       const pointer = getRoleGraphPointFromClient(event.clientX, event.clientY)
       if (!pointer) return
+      if (roleSelectionBox !== null) {
+        const nextBox = {
+          ...roleSelectionBox,
+          current: pointer
+        }
+        setRoleSelectionBox(nextBox)
+        applyRoleSelectionByBox(nextBox)
+        return
+      }
+      if (draggingRoleRelationCurve !== null) {
+        const relation = roleRelationsRef.current.find(
+          (item) => item.id === draggingRoleRelationCurve.relationId
+        )
+        if (!relation) return
+        const geometry = getRoleRelationGeometry(relation)
+        if (!geometry) return
+        const nextOffset = getRoleRelationCurveOffsetFromMidpoint(
+          pointer,
+          geometry.fromPoint,
+          geometry.toPoint
+        )
+        setRoleRelations((previous) => {
+          const nextRelations = previous.map((item) =>
+            item.id === draggingRoleRelationCurve.relationId
+              ? {
+                  ...item,
+                  curveOffsetX: nextOffset.x,
+                  curveOffsetY: nextOffset.y
+                }
+              : item
+          )
+          roleRelationsRef.current = nextRelations
+          return nextRelations
+        })
+        return
+      }
       if (roleLinkStart !== null) {
         const nextTarget = getRoleLinkTargetByPoint(pointer, roleLinkStart.roleId)
         setRoleLinkTarget(nextTarget)
@@ -3009,9 +4699,28 @@ function App() {
         }
       }
       if (draggingRoleId === null) return
-      const nextX = Math.max(0, pointer.x - roleDragOffset.x)
-      const nextY = Math.max(0, pointer.y - roleDragOffset.y)
-      updateRoleMemory(draggingRoleId, { roleX: nextX, roleY: nextY })
+      const dragIds = roleDragIdsRef.current
+      const offsetById = roleDragOffsetsByIdRef.current
+      if (!dragIds.length || !Object.keys(offsetById).length) {
+        const nextX = Math.max(0, pointer.x - roleDragOffset.x)
+        const nextY = Math.max(0, pointer.y - roleDragOffset.y)
+        updateRoleMemory(draggingRoleId, { roleX: nextX, roleY: nextY })
+        return
+      }
+      const dragIdSet = new Set(dragIds)
+      setMemory((previous) =>
+        previous.map((item) => {
+          if (item.kind !== 'role') return item
+          if (!dragIdSet.has(item.id)) return item
+          const offset = offsetById[item.id]
+          if (!offset) return item
+          return {
+            ...item,
+            roleX: Math.max(0, pointer.x - offset.x),
+            roleY: Math.max(0, pointer.y - offset.y)
+          }
+        })
+      )
     }
     const onPointerUp = (event: MouseEvent) => {
       const wasPanning = isRoleGraphPanning
@@ -3020,8 +4729,27 @@ function App() {
         roleGraphPanStartRef.current = null
       }
       if (wasPanning) return
+      if (roleSelectionBox !== null) {
+        const pointer = getRoleGraphPointFromClient(event.clientX, event.clientY)
+        if (pointer) {
+          const nextBox = {
+            ...roleSelectionBox,
+            current: pointer
+          }
+          applyRoleSelectionByBox(nextBox)
+        }
+        setRoleSelectionBox(null)
+        return
+      }
+      if (draggingRoleRelationCurve !== null) {
+        setDraggingRoleRelationCurve(null)
+        persistWorkspaceWithRoleRelations(roleRelationsRef.current)
+        return
+      }
       if (draggingRoleId !== null) {
         setDraggingRoleId(null)
+        roleDragIdsRef.current = []
+        roleDragOffsetsByIdRef.current = {}
       }
       if (roleLinkStart !== null) {
         const pointer = getRoleGraphPointFromClient(event.clientX, event.clientY)
@@ -3031,8 +4759,9 @@ function App() {
           updateOrCreateRoleRelation(
             roleLinkStart.roleId,
             finalTarget.roleId,
-            roleLinkStart.corner,
-            finalTarget.side
+            roleLinkStart.side,
+            finalTarget.side,
+            roleLinkStart.mode
           )
         }
       }
@@ -3048,9 +4777,11 @@ function App() {
     }
   }, [
     draggingRoleId,
+    draggingRoleRelationCurve,
     roleDragOffset.x,
     roleDragOffset.y,
     roleLinkStart,
+    roleSelectionBox,
     isRoleGraphPanning,
     roleGraphViewport.x,
     roleGraphViewport.y,
@@ -3196,7 +4927,6 @@ function App() {
         }
       })
     )
-    syncScriptRolesToMemory(nextDraft)
   }
 
   function readSelectedTextFromEditor() {
@@ -3227,6 +4957,265 @@ function App() {
     const x = Math.max(8, Math.min(clientX, maxX))
     const y = Math.max(8, Math.min(clientY, maxY))
     setEditorContextMenu({ open: true, x, y })
+  }
+
+  function closeScriptRolePicker() {
+    setScriptRolePicker(null)
+  }
+
+  function scheduleScriptLineDecorations() {
+    if (scriptDecorationFrameRef.current !== null) return
+    scriptDecorationFrameRef.current = window.requestAnimationFrame(() => {
+      scriptDecorationFrameRef.current = null
+      applyScriptLineDecorations()
+    })
+  }
+
+  function shouldRefreshScriptDecorationsFromChange(
+    event: Monaco.editor.IModelContentChangedEvent
+  ) {
+    if (activeVersionWritingModeRef.current !== 'script') return false
+    return event.changes.some((change) => {
+      if (change.text.includes('|')) return true
+      if (change.text.includes('\n')) return true
+      if (change.range.startColumn <= 40) return true
+      if (change.range.endColumn <= 40) return true
+      return false
+    })
+  }
+
+  function syncScriptRolesFromContentChanges(event: Monaco.editor.IModelContentChangedEvent) {
+    if (activeVersionWritingModeRef.current !== 'script') return
+    const model = editorRef.current?.getModel()
+    if (!model) return
+    const roleSet = new Set<string>()
+    for (const change of event.changes) {
+      if (!change.text.includes('|')) continue
+      const insertedLines = change.text.split('\n').length
+      const startLine = change.range.startLineNumber
+      const endLine = Math.min(model.getLineCount(), startLine + insertedLines - 1)
+      for (let line = startLine; line <= endLine; line += 1) {
+        const content = model.getLineContent(line)
+        const match = content.match(/^(\s*)([^|\n]{1,32})\|/)
+        if (!match) continue
+        const normalized = normalizeScriptRoleName(match[2] ?? '')
+        if (!normalized || isNarratorLabel(normalized)) continue
+        roleSet.add(normalized)
+      }
+    }
+    if (roleSet.size > 0) {
+      appendMemoryItems([...roleSet], 'role')
+    }
+  }
+
+  function isScriptRoleTracked(roleName: string) {
+    const normalized = normalizeScriptRoleName(roleName)
+    if (!normalized || isNarratorLabel(normalized)) return true
+    return trackedScriptRoleNamesRef.current.has(normalized)
+  }
+
+  function addScriptRoleToMemoryIfNeeded(roleName: string) {
+    const normalized = normalizeScriptRoleName(roleName)
+    if (!normalized || isNarratorLabel(normalized)) return false
+    if (trackedScriptRoleNamesRef.current.has(normalized)) return false
+    appendMemoryItems([normalized], 'role')
+    trackedScriptRoleNamesRef.current = new Set(trackedScriptRoleNamesRef.current).add(normalized)
+    scheduleScriptLineDecorations()
+    setStatus(`已加入角色库：${normalized}`)
+    return true
+  }
+
+  function buildScriptPrefixClassName(prefix: ScriptLinePrefix) {
+    if (prefix.isNarrator) return 'script-line-prefix script-line-prefix--narrator'
+    if (!isScriptRoleTracked(prefix.normalizedName)) {
+      return 'script-line-prefix script-line-prefix--role script-line-prefix--untracked'
+    }
+    return `script-line-prefix script-line-prefix--role script-line-prefix-color-${getScriptRoleColorIndex(prefix.normalizedName)}`
+  }
+
+  function applyScriptLineDecorations() {
+    const editor = editorRef.current
+    const monaco = monacoRef.current
+    const model = editor?.getModel()
+    if (!editor || !monaco || !model) return
+
+    if (activeVersionWritingModeRef.current !== 'script') {
+      if (scriptPrefixDecorationIdsRef.current.length > 0) {
+        scriptPrefixDecorationIdsRef.current = editor.deltaDecorations(
+          scriptPrefixDecorationIdsRef.current,
+          []
+        )
+      }
+      scriptLinePrefixByLineRef.current = new Map()
+      return
+    }
+
+    const draft = model.getValue()
+    if (!draft.includes('|')) {
+      if (scriptPrefixDecorationIdsRef.current.length > 0) {
+        scriptPrefixDecorationIdsRef.current = editor.deltaDecorations(
+          scriptPrefixDecorationIdsRef.current,
+          []
+        )
+      }
+      scriptLinePrefixByLineRef.current = new Map()
+      return
+    }
+
+    const prefixes = parseScriptLinePrefixes(draft)
+    const decorations = prefixes.map((prefix) => ({
+      range: new monaco.Range(
+        prefix.lineNumber,
+        prefix.startColumn,
+        prefix.lineNumber,
+        prefix.endColumn
+      ),
+      options: {
+        inlineClassName: buildScriptPrefixClassName(prefix),
+        hoverMessage: (() => {
+          if (prefix.isNarrator) return undefined
+          const roleItem = roleMemoryByNormalizedName.get(prefix.normalizedName.toLowerCase()) ?? null
+          if (!roleItem) {
+            return [{ value: '未加入角色库。点击标签可弹出菜单并加入角色库。' }]
+          }
+          const stance = getRoleStance(roleItem)
+          const note = getRoleNote(roleItem).trim()
+          return [
+            {
+              value: [
+                `**${getRoleName(roleItem)}**`,
+                `立场：${stance}/10（${getRoleStanceLabel(stance)}）`,
+                note ? `备注：${note}` : '备注：无',
+                '点击标签可切换角色；弹窗里可查看关系。'
+              ].join('\n\n')
+            }
+          ]
+        })(),
+        stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
+      }
+    }))
+
+    scriptPrefixDecorationIdsRef.current = editor.deltaDecorations(
+      scriptPrefixDecorationIdsRef.current,
+      decorations
+    )
+    scriptLinePrefixByLineRef.current = new Map(prefixes.map((prefix) => [prefix.lineNumber, prefix]))
+  }
+
+  function getScriptPrefixAtPosition(lineNumber: number, column: number) {
+    const prefix = scriptLinePrefixByLineRef.current.get(lineNumber)
+    if (!prefix) return null
+    // Monaco range endColumn is exclusive, so only treat [startColumn, endColumn) as prefix.
+    // This avoids swallowing the first content character after `角色名|`.
+    if (column < prefix.startColumn || column >= prefix.endColumn) return null
+    return prefix
+  }
+
+  function openScriptRolePickerAt(prefix: ScriptLinePrefix, clientX: number, clientY: number) {
+    const maxX = Math.max(8, window.innerWidth - SCRIPT_ROLE_PICKER_WIDTH - 8)
+    const maxY = Math.max(8, window.innerHeight - SCRIPT_ROLE_PICKER_HEIGHT - 8)
+    const preferredX = clientX - Math.round(SCRIPT_ROLE_PICKER_WIDTH * 0.18)
+    const preferredTopY = clientY - SCRIPT_ROLE_PICKER_HEIGHT - 10
+    const preferredBottomY = clientY + 10
+    const nextY =
+      preferredTopY >= 8 ? preferredTopY : Math.max(8, Math.min(preferredBottomY, maxY))
+    setScriptRolePicker({
+      lineNumber: prefix.lineNumber,
+      x: Math.max(8, Math.min(preferredX, maxX)),
+      y: nextY,
+      query: '',
+      currentName: prefix.normalizedName
+    })
+  }
+
+  function centerRoleGraphOnRole(roleId: number, retry = 6) {
+    const board = roleGraphBoardRef.current
+    const position = visibleRolePositionById.get(roleId)
+    if (!board || !position) {
+      if (retry > 0) {
+        window.setTimeout(() => {
+          centerRoleGraphOnRole(roleId, retry - 1)
+        }, 24)
+      }
+      return
+    }
+
+    const boardWidth = Math.max(1, board.clientWidth)
+    const boardHeight = Math.max(1, board.clientHeight)
+    setRoleGraphViewport((previous) => {
+      const scale = clampNumber(
+        Number.isFinite(previous.scale) ? previous.scale : 1,
+        ROLE_GRAPH_MIN_SCALE,
+        ROLE_GRAPH_MAX_SCALE
+      )
+      const nodeCenterX = position.x + ROLE_NODE_WIDTH / 2
+      const nodeCenterY = position.y + ROLE_NODE_HEIGHT / 2
+      return {
+        ...previous,
+        x: boardWidth / 2 - nodeCenterX * scale,
+        y: boardHeight / 2 - nodeCenterY * scale
+      }
+    })
+  }
+
+  function openRoleRelationsPanel(roleId: number, source: 'script-tag' | 'memory-card' = 'script-tag') {
+    setActivePanel('memory')
+    setMemoryModule('role')
+    setRoleGraphView('graph')
+    setMemorySearchQuery('')
+    setSelectedRoleIds(new Set([roleId]))
+    centerRoleGraphOnRole(roleId)
+    setStatus(
+      source === 'memory-card'
+        ? '已定位到角色脑图中的角色卡片'
+        : '已打开角色脑图，可直接拖拽连线或双击连线编辑关系'
+    )
+  }
+
+  function applyScriptRoleSwitch(lineNumber: number, nextRoleName: string) {
+    const editor = editorRef.current
+    const monaco = monacoRef.current
+    const model = editor?.getModel()
+    if (!editor || !monaco || !model) return
+    const normalizedRole = normalizeScriptRoleName(nextRoleName) || '旁白'
+    const lineContent = model.getLineContent(lineNumber)
+    const lineRange = new monaco.Range(lineNumber, 1, lineNumber, model.getLineMaxColumn(lineNumber))
+    const match = lineContent.match(/^(\s*)([^|\n]{1,32})\|(\s*)(.*)$/)
+    const indent = match?.[1] ?? lineContent.match(/^(\s*)/)?.[1] ?? ''
+    const body = (match?.[4] ?? lineContent.slice(indent.length)).replace(/^\s+/, '')
+    const nextLine = `${indent}${normalizedRole}| ${body}`
+
+    editor.executeEdits('script-role-switch', [{ range: lineRange, text: nextLine }])
+    editor.setPosition({ lineNumber, column: `${indent}${normalizedRole}| `.length + 1 })
+    editor.focus()
+
+    if (!isNarratorLabel(normalizedRole)) {
+      appendMemoryItems([normalizedRole], 'role')
+    }
+    setStatus(`已切换为：${normalizedRole}`)
+    closeScriptRolePicker()
+    refreshSelectionState()
+  }
+
+  function normalizeScriptClipboardText(text: string) {
+    return text.replace(/^(\s*)([^|\n]{1,32})\|(?=\S)/gm, '$1$2| ')
+  }
+
+  function commitScriptRolePicker(roleName?: string) {
+    if (!scriptRolePicker) return
+    const nextRole = normalizeScriptRoleName(roleName ?? scriptRolePicker.query)
+    if (!nextRole) return
+    applyScriptRoleSwitch(scriptRolePicker.lineNumber, nextRole)
+  }
+
+  function saveScriptRolePickerRoleDraft() {
+    if (!scriptRolePickerRoleDraft) return
+    updateRoleMemory(scriptRolePickerRoleDraft.roleId, {
+      roleName: scriptRolePickerRoleDraft.roleName,
+      roleNote: scriptRolePickerRoleDraft.roleNote,
+      roleStance: scriptRolePickerRoleDraft.roleStance
+    })
+    setStatus('角色信息已同步到记忆库')
   }
 
   async function runEditorAction(primary: string, fallback?: string) {
@@ -3272,7 +5261,7 @@ function App() {
 
   function createEmptyPage(items: Chapter[], kind: ChapterKind, specialType?: SpecialPageType) {
     const nextId = Math.max(...items.map((chapter) => chapter.id), 0) + 1
-    const firstVersion = buildVersion(1, 1, '')
+    const firstVersion = buildVersion(1, 1, '', writingMode)
     const title =
       kind === 'chapter'
         ? `第${items.filter((item) => item.kind === 'chapter').length + 1}章`
@@ -3464,16 +5453,35 @@ function App() {
           : chapter
       )
     )
+    setWritingMode(version.writingMode)
     clearSelectionState()
     clearVersionRenameState()
     setStatus(`已切换到 ${activeChapter.title} / ${version.title}`)
+  }
+
+  function setActiveVersionMode(nextMode: WritingMode) {
+    if (!activeChapter || !activeVersion) return
+    setChapters((previous) =>
+      previous.map((chapter) => {
+        if (chapter.id !== activeChapter.id) return chapter
+        return {
+          ...chapter,
+          versions: chapter.versions.map((version) =>
+            version.id === activeVersion.id
+              ? { ...version, writingMode: nextMode }
+              : version
+          )
+        }
+      })
+    )
+    setWritingMode(nextMode)
   }
 
   function addVersion() {
     if (!activeChapter) return
     const nextId = Math.max(...activeChapter.versions.map((version) => version.id), 0) + 1
     const nextIndex = activeChapter.versions.length + 1
-    const nextVersion = buildVersion(nextId, nextIndex, currentDraft)
+    const nextVersion = buildVersion(nextId, nextIndex, currentDraft, writingMode)
 
     setChapters((previous) =>
       previous.map((chapter) =>
@@ -3587,13 +5595,19 @@ function App() {
     setStatus(`已重命名为 ${nextTitle}`)
   }
 
-  function createBackup(content: string, title?: string) {
+  function createBackup(
+    content: string,
+    title?: string,
+    options?: { backupX?: number; backupY?: number }
+  ) {
     if (!content.trim()) return
     const now = nowLabel()
     const backup: BackupItem = {
       id: Date.now(),
       title: title?.trim() || '写作参考',
       content,
+      ...(typeof options?.backupX === 'number' ? { backupX: options.backupX } : {}),
+      ...(typeof options?.backupY === 'number' ? { backupY: options.backupY } : {}),
       createdAt: now,
       updatedAt: now
     }
@@ -3603,10 +5617,19 @@ function App() {
 
   function deleteBackup(backupId: number) {
     setBackups((previous) => previous.filter((backup) => backup.id !== backupId))
+    setBackupRelations((previous) =>
+      previous.filter(
+        (relation) =>
+          relation.fromBackupId !== backupId && relation.toBackupId !== backupId
+      )
+    )
     setStatus('已删除参考')
   }
 
-  function updateBackup(backupId: number, patch: Partial<Pick<BackupItem, 'title' | 'content'>>) {
+  function updateBackup(
+    backupId: number,
+    patch: Partial<Pick<BackupItem, 'title' | 'content' | 'backupX' | 'backupY'>>
+  ) {
     const now = nowLabel()
     setBackups((previous) =>
       previous.map((backup) =>
@@ -3627,9 +5650,9 @@ function App() {
       .filter(Boolean)
     if (!normalized.length) return
 
-    const chapter = activeChapter ?? chapters[0]
+    const chapter = activeChapterRef.current ?? chaptersRef.current[0]
     const version =
-      activeVersion ??
+      activeVersionRef.current ??
       chapter?.versions.find((item) => item.id === chapter.activeVersionId) ??
       chapter?.versions[0]
     if (!chapter || !version) return
@@ -3638,16 +5661,27 @@ function App() {
 
     setMemory((previous) => {
       const existing = new Set(
-        previous.map((item) => `${item.kind}:${item.chapterId}:${item.versionId}:${item.text}`)
+        previous.map((item) =>
+          item.kind === 'role'
+            ? `role:${normalizeScriptRoleName(getRoleName(item)).toLowerCase()}`
+            : `${item.kind}:${item.chapterId}:${item.versionId}:${item.text}`
+        )
       )
       const merged = [...previous]
       let nextId = previous.reduce((max, item) => Math.max(max, item.id), 0) + 1
       let changed = false
       for (const text of normalized) {
-        const key = `${kind}:${chapter.id}:${version.id}:${text}`
+        const parsedRole = kind === 'role' ? parseLegacyRoleText(text) : null
+        const roleKey =
+          kind === 'role'
+            ? normalizeScriptRoleName(parsedRole?.roleName ?? text).toLowerCase()
+            : ''
+        const key =
+          kind === 'role'
+            ? `role:${roleKey}`
+            : `${kind}:${chapter.id}:${version.id}:${text}`
         if (existing.has(key)) continue
         existing.add(key)
-        const parsedRole = kind === 'role' ? parseLegacyRoleText(text) : null
         merged.push({
           id: nextId,
           kind,
@@ -3684,9 +5718,9 @@ function App() {
       roleY?: number
     }
   ) {
-    const chapter = activeChapter ?? chapters[0]
+    const chapter = activeChapterRef.current ?? chaptersRef.current[0]
     const version =
-      activeVersion ??
+      activeVersionRef.current ??
       chapter?.versions.find((item) => item.id === chapter.activeVersionId) ??
       chapter?.versions[0]
     if (!chapter || !version) return
@@ -3695,7 +5729,32 @@ function App() {
     setMemory((previous) => {
       const nextId = previous.reduce((max, item) => Math.max(max, item.id), 0) + 1
       const roleIndex = previous.filter((item) => item.kind === 'role').length
-      const roleName = (options?.roleName ?? '新角色').trim() || `角色${nextId}`
+      const requestedRoleName = (options?.roleName ?? '新角色').trim() || `角色${nextId}`
+      let roleName = requestedRoleName
+      const existingRoleNames = new Set(
+        previous
+          .filter((item) => item.kind === 'role')
+          .map((item) => normalizeScriptRoleName(getRoleName(item)).toLowerCase())
+          .filter(Boolean)
+      )
+      if (kind === 'role') {
+        const normalizedRequested = normalizeScriptRoleName(requestedRoleName).toLowerCase()
+        if (normalizedRequested && existingRoleNames.has(normalizedRequested)) {
+          if (typeof options?.roleName === 'string' && options.roleName.trim()) {
+            return previous
+          }
+          const base = normalizeScriptRoleName(requestedRoleName) || '新角色'
+          let suffix = 2
+          let candidate = `${base}${suffix}`
+          while (existingRoleNames.has(normalizeScriptRoleName(candidate).toLowerCase())) {
+            suffix += 1
+            candidate = `${base}${suffix}`
+          }
+          roleName = candidate
+        } else {
+          roleName = normalizeScriptRoleName(requestedRoleName) || `角色${nextId}`
+        }
+      }
       const roleNote = options?.roleNote ?? ''
       const nextRoleX =
         typeof options?.roleX === 'number'
@@ -3732,14 +5791,60 @@ function App() {
     })
   }
 
+function normalizeScriptRoleName(raw: string) {
+  return normalizeRoleName(raw)
+}
+
+  function isNarratorLabel(name: string) {
+    return SCRIPT_NARRATOR_NAMES.has(name.trim().toLowerCase())
+  }
+
+  function getScriptRoleColorIndex(name: string) {
+    const text = name.trim().toLowerCase()
+    if (!text) return 0
+    let hash = 0
+    for (let i = 0; i < text.length; i += 1) {
+      hash = (hash * 31 + text.charCodeAt(i)) | 0
+    }
+    return Math.abs(hash) % SCRIPT_ROLE_COLOR_COUNT
+  }
+
+  function parseScriptLinePrefixes(draft: string): ScriptLinePrefix[] {
+    const lines = draft.split('\n')
+    const output: ScriptLinePrefix[] = []
+
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index]
+      const match = line.match(/^(\s*)([^|\n]{1,32})\|/)
+      if (!match) continue
+      const indent = match[1] ?? ''
+      const rawName = (match[2] ?? '').trim()
+      const normalizedName = normalizeScriptRoleName(rawName)
+      if (!normalizedName) continue
+      const startColumn = indent.length + 1
+      const endColumn = startColumn + rawName.length + 1
+      output.push({
+        lineNumber: index + 1,
+        startColumn,
+        endColumn,
+        rawName,
+        normalizedName,
+        isNarrator: isNarratorLabel(normalizedName)
+      })
+    }
+
+    return output
+  }
+
   function extractRoleNamesFromDraft(draft: string) {
     const roleNames: string[] = []
     const roleRegex = /^\s*([^|\n]{1,32})\|/gm
     for (const match of draft.matchAll(roleRegex)) {
       const raw = String(match[1] || '').trim()
       if (!raw) continue
-      const normalized = raw.replace(/^[：:【\[]+|[】\]]+$/g, '').trim()
+      const normalized = normalizeScriptRoleName(raw)
       if (!normalized) continue
+      if (isNarratorLabel(normalized)) continue
       roleNames.push(normalized)
     }
     return [...new Set(roleNames)]
@@ -3805,38 +5910,98 @@ function App() {
 
   function beginRoleDrag(event: ReactMouseEvent<HTMLElement>, roleId: number) {
     if (isRoleGraphSpacePressed || isRoleGraphPanning) return
+    if (event.button !== 0) return
+    if (roleLinkStart !== null || draggingRoleRelationCurve !== null) return
     event.preventDefault()
     event.stopPropagation()
+    setRoleSelectionBox(null)
+    setRoleNodeMenu({ open: false, x: 0, y: 0, roleId: null })
+    setRoleRelationMenu({ open: false, x: 0, y: 0, relationId: null })
+    if (event.ctrlKey || event.metaKey || event.shiftKey) {
+      setSelectedRoleIds((previous) => {
+        const next = new Set(previous)
+        if (next.has(roleId)) next.delete(roleId)
+        else next.add(roleId)
+        return next
+      })
+      return
+    }
     const pointer = getRoleGraphPointFromClient(event.clientX, event.clientY)
     if (!pointer) return
-    const nodePosition = visibleRolePositionById.get(roleId)
-    if (!nodePosition) return
-    setDraggingRoleId(roleId)
-    setRoleDragOffset({
-      x: pointer.x - nodePosition.x,
-      y: pointer.y - nodePosition.y
+    const currentSelected = new Set(selectedRoleIds)
+    const nextSelected =
+      currentSelected.has(roleId) && currentSelected.size > 1
+        ? currentSelected
+        : new Set([roleId])
+    setSelectedRoleIds(nextSelected)
+    const dragIds = Array.from(nextSelected)
+    const nextOffsets: Record<number, { x: number; y: number }> = {}
+    dragIds.forEach((id) => {
+      const nodePosition = visibleRolePositionById.get(id)
+      if (!nodePosition) return
+      nextOffsets[id] = {
+        x: pointer.x - nodePosition.x,
+        y: pointer.y - nodePosition.y
+      }
     })
+    if (Object.keys(nextOffsets).length === 0) return
+    roleDragIdsRef.current = dragIds
+    roleDragOffsetsByIdRef.current = nextOffsets
+    const anchorOffset = nextOffsets[roleId]
+    if (anchorOffset) {
+      setRoleDragOffset(anchorOffset)
+    }
+    setDraggingRoleId(roleId)
   }
 
   function beginRoleGraphPan(event: ReactMouseEvent<HTMLDivElement>) {
-    if (!isRoleGraphFullscreen) return
+    const isPrimaryDrag = event.button === 0
     const isSpaceLeftDrag = isRoleGraphSpacePressed && event.button === 0
     const isMiddleDrag = event.button === 1
-    if (!isSpaceLeftDrag && !isMiddleDrag) return
-    event.preventDefault()
-    roleGraphPanStartRef.current = {
-      clientX: event.clientX,
-      clientY: event.clientY,
-      originX: roleGraphViewport.x,
-      originY: roleGraphViewport.y
+    if (isRoleGraphFullscreen && (isSpaceLeftDrag || isMiddleDrag)) {
+      event.preventDefault()
+      roleGraphPanStartRef.current = {
+        clientX: event.clientX,
+        clientY: event.clientY,
+        originX: roleGraphViewport.x,
+        originY: roleGraphViewport.y
+      }
+      setIsRoleGraphPanning(true)
+      if (draggingRoleId !== null) setDraggingRoleId(null)
+      roleDragIdsRef.current = []
+      roleDragOffsetsByIdRef.current = {}
+      if (roleLinkStart !== null) {
+        setRoleLinkStart(null)
+        setRoleLinkTarget(null)
+        setRoleLinkPreview(null)
+      }
+      setRoleSelectionBox(null)
+      setRoleNodeMenu({ open: false, x: 0, y: 0, roleId: null })
+      setRoleRelationMenu({ open: false, x: 0, y: 0, relationId: null })
+      return
     }
-    setIsRoleGraphPanning(true)
-    if (draggingRoleId !== null) setDraggingRoleId(null)
-    if (roleLinkStart !== null) {
-      setRoleLinkStart(null)
-      setRoleLinkTarget(null)
-      setRoleLinkPreview(null)
+    if (!isPrimaryDrag) return
+    const target = event.target
+    if (
+      target instanceof Element &&
+      target.closest(
+        '.role-graph-node, .role-link-handle, .role-graph-edge, .role-graph-corner-fullscreen, .role-graph-exit-button, .role-link-mode-picker, .editor-context-menu, .role-relation-menu, .role-node-menu, .role-graph-visual-button, .graph-visual-panel'
+      )
+    ) {
+      return
     }
+    const pointer = getRoleGraphPointFromClient(event.clientX, event.clientY)
+    if (!pointer) return
+    const additive = event.ctrlKey || event.metaKey || event.shiftKey
+    setRoleSelectionBox({
+      start: pointer,
+      current: pointer,
+      additive,
+      baseSelectedIds: additive ? Array.from(selectedRoleIds) : []
+    })
+    if (!additive) setSelectedRoleIds(new Set())
+    setRoleNodeMenu({ open: false, x: 0, y: 0, roleId: null })
+    setRoleRelationMenu({ open: false, x: 0, y: 0, relationId: null })
   }
 
   function handleRoleGraphDoubleClick(event: ReactMouseEvent<HTMLDivElement>) {
@@ -3846,7 +6011,7 @@ function App() {
     if (
       target instanceof Element &&
       target.closest(
-        '.role-graph-node, .role-link-handle, .role-graph-edge, .role-graph-corner-fullscreen, .role-graph-exit-button'
+        '.role-graph-node, .role-link-handle, .role-graph-edge, .role-graph-corner-fullscreen, .role-graph-exit-button, .role-graph-visual-button, .graph-visual-panel'
       )
     ) {
       return
@@ -3902,16 +6067,20 @@ function App() {
   function beginRoleLink(
     event: ReactMouseEvent<HTMLButtonElement>,
     roleId: number,
-    corner: RoleLinkCorner
+    side: RoleLinkSide,
+    mode?: RoleRelationMode
   ) {
     if (isRoleGraphSpacePressed || isRoleGraphPanning) return
     event.preventDefault()
     event.stopPropagation()
+    const nextMode = mode ?? activeRoleRelationMode
+    setActiveRoleRelationMode(nextMode)
     const pointer = getRoleGraphPointFromClient(event.clientX, event.clientY)
     if (!pointer) return
     setRoleRelationMenu({ open: false, x: 0, y: 0, relationId: null })
+    setRoleNodeMenu({ open: false, x: 0, y: 0, roleId: null })
     const nextTarget = getRoleLinkTargetByPoint(pointer, roleId)
-    setRoleLinkStart({ roleId, corner })
+    setRoleLinkStart({ roleId, side, mode: nextMode })
     setRoleLinkTarget(nextTarget)
     if (nextTarget) {
       const nextPosition = visibleRolePositionById.get(nextTarget.roleId)
@@ -3926,49 +6095,63 @@ function App() {
   function updateOrCreateRoleRelation(
     fromId: number,
     toId: number,
-    fromAnchor: RoleLinkCorner,
-    toAnchor: RoleLinkSide
+    fromAnchor: RoleLinkSide,
+    toAnchor: RoleLinkSide,
+    mode: RoleRelationMode
   ) {
     if (fromId === toId) return
+    const strokeColor = normalizeRelationColor(
+      activeRoleRelationStrokeColor,
+      DEFAULT_ROLE_RELATION_STROKE_COLOR
+    )
     const pairA = Math.min(fromId, toId)
     const pairB = Math.max(fromId, toId)
-    setRoleRelations((previous) => {
-      const index = previous.findIndex((relation) => {
-        const a = Math.min(relation.fromMemoryId, relation.toMemoryId)
-        const b = Math.max(relation.fromMemoryId, relation.toMemoryId)
-        return a === pairA && b === pairB
-      })
-      if (index >= 0) {
-        return previous.map((relation, relationIndex) =>
-          relationIndex === index
-            ? {
-                ...relation,
-                fromMemoryId: fromId,
-                toMemoryId: toId,
-                fromAnchor,
-                toAnchor
-              }
-            : relation
-        )
-      }
-      return [
-        ...previous,
-        {
-          id: Date.now(),
-          fromMemoryId: fromId,
-          toMemoryId: toId,
-          fromAnchor,
-          toAnchor,
-          relation: '',
-          createdAt: nowLabel()
-        }
-      ]
+    const index = roleRelations.findIndex((relation) => {
+      const a = Math.min(relation.fromMemoryId, relation.toMemoryId)
+      const b = Math.max(relation.fromMemoryId, relation.toMemoryId)
+      return a === pairA && b === pairB
     })
+    const nextRelations =
+      index >= 0
+        ? roleRelations.map((relation, relationIndex) =>
+            relationIndex === index
+              ? {
+                  ...relation,
+                  fromMemoryId: fromId,
+                  toMemoryId: toId,
+                  fromAnchor,
+                  toAnchor,
+                  mode,
+                  strokeColor
+                }
+              : relation
+          )
+        : [
+            ...roleRelations,
+            {
+              id: Date.now(),
+              fromMemoryId: fromId,
+              toMemoryId: toId,
+              fromAnchor,
+              toAnchor,
+              curveOffsetX: 0,
+              curveOffsetY: 0,
+              mode,
+              relation: '',
+              intimacy: 0,
+              tags: [],
+              strokeColor,
+              createdAt: nowLabel()
+            }
+          ]
+    setRoleRelations(nextRelations)
+    persistWorkspaceWithRoleRelations(nextRelations)
   }
 
   function openRoleRelationContextMenu(event: ReactMouseEvent<SVGElement>, relationId: number) {
     event.preventDefault()
     event.stopPropagation()
+    setRoleNodeMenu({ open: false, x: 0, y: 0, roleId: null })
     setRoleRelationMenu({
       open: true,
       x: event.clientX,
@@ -3980,27 +6163,76 @@ function App() {
   function editRoleRelation(relationId: number) {
     const current = roleRelations.find((item) => item.id === relationId)
     if (!current) return
-    const fromName = roleNameById.get(current.fromMemoryId) || `角色${current.fromMemoryId}`
-    const toName = roleNameById.get(current.toMemoryId) || `角色${current.toMemoryId}`
-    const next = window.prompt(`请输入角色关系（${fromName} ↔ ${toName}）`, current.relation || '')
-    if (next === null) return
-    setRoleRelations((previous) =>
-      previous.map((item) =>
-        item.id === relationId
-          ? {
-              ...item,
-              relation: next.trim()
-            }
-          : item
-      )
-    )
+    setRoleRelationEditorDialog({
+      relationId,
+      intimacy: normalizeRelationIntimacy(current.intimacy ?? 0),
+      tagsInput: Array.isArray(current.tags) ? current.tags.join('、') : ''
+    })
     setRoleRelationMenu({ open: false, x: 0, y: 0, relationId: null })
-    setStatus('角色关系已更新')
   }
 
   function removeRoleRelation(relationId: number) {
-    setRoleRelations((previous) => previous.filter((item) => item.id !== relationId))
+    const nextRelations = roleRelations.filter((item) => item.id !== relationId)
+    setRoleRelations(nextRelations)
+    persistWorkspaceWithRoleRelations(nextRelations)
     setRoleRelationMenu({ open: false, x: 0, y: 0, relationId: null })
+    setRoleRelationEditorDialog((previous) =>
+      previous && previous.relationId === relationId ? null : previous
+    )
+  }
+
+  function closeRoleRelationEditor() {
+    setRoleRelationEditorDialog(null)
+  }
+
+  function saveRoleRelationTagOptions(rawInput: string) {
+    const nextOptions = mergeRoleRelationTagOptions(roleRelationTagOptions, rawInput)
+    const unchanged =
+      nextOptions.length === roleRelationTagOptions.length &&
+      nextOptions.every((item, index) => item === roleRelationTagOptions[index])
+    if (unchanged) return 0
+    const previousLength = roleRelationTagOptions.length
+    setRoleRelationTagOptions(nextOptions)
+    return Math.max(0, nextOptions.length - previousLength)
+  }
+
+  function handleRoleRelationTagsInputKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
+    if (event.key !== 'Enter') return
+    event.preventDefault()
+    if (!roleRelationEditorDialog) return
+    const rawInput = roleRelationEditorDialog.tagsInput.trim()
+    if (!rawInput) return
+    const nextTags = splitRelationTags(rawInput)
+    const addedCount = saveRoleRelationTagOptions(rawInput)
+    setRoleRelationEditorDialog((previous) =>
+      previous
+        ? {
+            ...previous,
+            tagsInput: nextTags.join('、')
+          }
+        : previous
+    )
+    setStatus(addedCount > 0 ? `已新增 ${addedCount} 个关系标签` : '这些关系标签已在可选列表中')
+  }
+
+  function commitRoleRelationEditor() {
+    if (!roleRelationEditorDialog) return
+    const nextTags = splitRelationTags(roleRelationEditorDialog.tagsInput)
+    saveRoleRelationTagOptions(roleRelationEditorDialog.tagsInput)
+    const nextRelations = roleRelations.map((item) =>
+      item.id === roleRelationEditorDialog.relationId
+        ? {
+            ...item,
+            relation: '',
+            intimacy: normalizeRelationIntimacy(roleRelationEditorDialog.intimacy),
+            tags: nextTags
+          }
+        : item
+    )
+    setRoleRelations(nextRelations)
+    persistWorkspaceWithRoleRelations(nextRelations)
+    setRoleRelationEditorDialog(null)
+    setStatus('角色关系已更新')
   }
 
   function handleRoleGraphMouseMove(event: ReactMouseEvent<HTMLDivElement>) {
@@ -4016,6 +6248,42 @@ function App() {
     }
     const pointer = getRoleGraphPointFromClient(event.clientX, event.clientY)
     if (!pointer) return
+    if (roleSelectionBox !== null) {
+      const nextBox = {
+        ...roleSelectionBox,
+        current: pointer
+      }
+      setRoleSelectionBox(nextBox)
+      applyRoleSelectionByBox(nextBox)
+      return
+    }
+    if (draggingRoleRelationCurve !== null) {
+      const relation = roleRelationsRef.current.find(
+        (item) => item.id === draggingRoleRelationCurve.relationId
+      )
+      if (!relation) return
+      const geometry = getRoleRelationGeometry(relation)
+      if (!geometry) return
+      const nextOffset = getRoleRelationCurveOffsetFromMidpoint(
+        pointer,
+        geometry.fromPoint,
+        geometry.toPoint
+      )
+      setRoleRelations((previous) => {
+        const nextRelations = previous.map((item) =>
+          item.id === draggingRoleRelationCurve.relationId
+            ? {
+                ...item,
+                curveOffsetX: nextOffset.x,
+                curveOffsetY: nextOffset.y
+              }
+            : item
+        )
+        roleRelationsRef.current = nextRelations
+        return nextRelations
+      })
+      return
+    }
     if (roleLinkStart !== null) {
       const nextTarget = getRoleLinkTargetByPoint(pointer, roleLinkStart.roleId)
       setRoleLinkTarget(nextTarget)
@@ -4031,9 +6299,28 @@ function App() {
       }
     }
     if (draggingRoleId === null) return
-    const nextX = Math.max(0, pointer.x - roleDragOffset.x)
-    const nextY = Math.max(0, pointer.y - roleDragOffset.y)
-    updateRoleMemory(draggingRoleId, { roleX: nextX, roleY: nextY })
+    const dragIds = roleDragIdsRef.current
+    const offsetById = roleDragOffsetsByIdRef.current
+    if (!dragIds.length || !Object.keys(offsetById).length) {
+      const nextX = Math.max(0, pointer.x - roleDragOffset.x)
+      const nextY = Math.max(0, pointer.y - roleDragOffset.y)
+      updateRoleMemory(draggingRoleId, { roleX: nextX, roleY: nextY })
+      return
+    }
+    const dragIdSet = new Set(dragIds)
+    setMemory((previous) =>
+      previous.map((item) => {
+        if (item.kind !== 'role') return item
+        if (!dragIdSet.has(item.id)) return item
+        const offset = offsetById[item.id]
+        if (!offset) return item
+        return {
+          ...item,
+          roleX: Math.max(0, pointer.x - offset.x),
+          roleY: Math.max(0, pointer.y - offset.y)
+        }
+      })
+    )
   }
 
   function handleRoleGraphMouseUp(event: ReactMouseEvent<HTMLDivElement>) {
@@ -4043,8 +6330,27 @@ function App() {
       roleGraphPanStartRef.current = null
     }
     if (wasPanning) return
+    if (roleSelectionBox !== null) {
+      const pointer = getRoleGraphPointFromClient(event.clientX, event.clientY)
+      if (pointer) {
+        const nextBox = {
+          ...roleSelectionBox,
+          current: pointer
+        }
+        applyRoleSelectionByBox(nextBox)
+      }
+      setRoleSelectionBox(null)
+      return
+    }
+    if (draggingRoleRelationCurve !== null) {
+      setDraggingRoleRelationCurve(null)
+      persistWorkspaceWithRoleRelations(roleRelationsRef.current)
+      return
+    }
     if (draggingRoleId !== null) {
       setDraggingRoleId(null)
+      roleDragIdsRef.current = []
+      roleDragOffsetsByIdRef.current = {}
     }
     if (roleLinkStart === null) return
     const pointer = getRoleGraphPointFromClient(event.clientX, event.clientY)
@@ -4054,13 +6360,406 @@ function App() {
       updateOrCreateRoleRelation(
         roleLinkStart.roleId,
         finalTarget.roleId,
-        roleLinkStart.corner,
-        finalTarget.side
+        roleLinkStart.side,
+        finalTarget.side,
+        roleLinkStart.mode
       )
     }
     setRoleLinkStart(null)
     setRoleLinkTarget(null)
     setRoleLinkPreview(null)
+  }
+
+  function beginBackupDrag(event: ReactMouseEvent<HTMLElement>, backupId: number) {
+    if (isBackupGraphSpacePressed || isBackupGraphPanning) return
+    if (event.button !== 0) return
+    if (backupLinkStart !== null || draggingBackupRelationCurve !== null) return
+    const boardPoint = getBackupGraphPointFromClient(event.clientX, event.clientY)
+    if (!boardPoint) return
+    const position = backupPositionById.get(backupId)
+    if (!position) return
+    event.preventDefault()
+    event.stopPropagation()
+    setBackupRelationMenu({ open: false, x: 0, y: 0, relationId: null })
+    setBackupNodeMenu({ open: false, x: 0, y: 0, backupId: null })
+    setSelectedBackupId(backupId)
+    setDraggingBackupId(backupId)
+    setBackupDragOffset({
+      x: boardPoint.x - position.x,
+      y: boardPoint.y - position.y
+    })
+  }
+
+  function beginBackupGraphPan(event: ReactMouseEvent<HTMLDivElement>) {
+    const isPrimaryDrag = event.button === 0
+    const isSpaceLeftDrag = isBackupGraphSpacePressed && event.button === 0
+    const isMiddleDrag = event.button === 1
+    if (isBackupGraphFullscreen && (isSpaceLeftDrag || isMiddleDrag)) {
+      event.preventDefault()
+      backupGraphPanStartRef.current = {
+        clientX: event.clientX,
+        clientY: event.clientY,
+        originX: backupGraphViewport.x,
+        originY: backupGraphViewport.y
+      }
+      setIsBackupGraphPanning(true)
+      if (draggingBackupId !== null) setDraggingBackupId(null)
+      if (backupLinkStart !== null) {
+        setBackupLinkStart(null)
+        setBackupLinkTarget(null)
+        setBackupLinkPreview(null)
+      }
+      return
+    }
+    if (!isPrimaryDrag) return
+    const target = event.target
+    if (
+      target instanceof Element &&
+      target.closest(
+        '.backup-graph-node, .backup-link-handle, .backup-graph-edge, .role-graph-corner-fullscreen, .role-graph-exit-button, .editor-context-menu, .backup-relation-menu, .backup-node-menu, .backup-link-mode-picker, .role-graph-visual-button, .graph-visual-panel'
+      )
+    ) {
+      return
+    }
+    if (backupRelationMenu.open) {
+      setBackupRelationMenu({ open: false, x: 0, y: 0, relationId: null })
+    }
+    if (backupNodeMenu.open) {
+      setBackupNodeMenu({ open: false, x: 0, y: 0, backupId: null })
+    }
+    setSelectedBackupId(null)
+  }
+
+  function handleBackupGraphDoubleClick(event: ReactMouseEvent<HTMLDivElement>) {
+    if (!isBackupGraphActive) return
+    if (draggingBackupId !== null || backupLinkStart !== null || isBackupGraphPanning) return
+    const target = event.target
+    if (
+      target instanceof Element &&
+      target.closest(
+        '.backup-graph-node, .backup-link-handle, .backup-graph-edge, .role-graph-corner-fullscreen, .role-graph-exit-button, .role-graph-visual-button, .graph-visual-panel'
+      )
+    ) {
+      return
+    }
+    const pointer = getBackupGraphPointFromClient(event.clientX, event.clientY)
+    if (!pointer) return
+    createBackup('事件内容', '新事件', {
+      backupX: pointer.x - BACKUP_NODE_WIDTH / 2,
+      backupY: pointer.y - BACKUP_NODE_HEIGHT / 2
+    })
+    setStatus('已新增事件卡')
+  }
+
+  function handleBackupGraphWheel(event: ReactWheelEvent<HTMLDivElement>) {
+    if (!isBackupGraphFullscreen) return
+    event.preventDefault()
+    const board = backupGraphBoardRef.current
+    if (!board) return
+    const rect = board.getBoundingClientRect()
+    const anchorX = event.clientX - rect.left
+    const anchorY = event.clientY - rect.top
+    const zoomFactor = event.deltaY < 0 ? ROLE_GRAPH_ZOOM_FACTOR : 1 / ROLE_GRAPH_ZOOM_FACTOR
+    setBackupGraphViewport((previous) => {
+      const nextScale = clampNumber(
+        previous.scale * zoomFactor,
+        ROLE_GRAPH_MIN_SCALE,
+        ROLE_GRAPH_MAX_SCALE
+      )
+      if (nextScale === previous.scale) return previous
+      const graphX = (anchorX - previous.x) / previous.scale
+      const graphY = (anchorY - previous.y) / previous.scale
+      return {
+        scale: nextScale,
+        x: anchorX - graphX * nextScale,
+        y: anchorY - graphY * nextScale
+      }
+    })
+  }
+
+  async function toggleBackupGraphFullscreen() {
+    const board = backupGraphBoardRef.current
+    if (!board) return
+    if (document.fullscreenElement === board) {
+      await document.exitFullscreen().catch(() => {})
+      return
+    }
+    if (document.fullscreenElement) {
+      await document.exitFullscreen().catch(() => {})
+    }
+    await board.requestFullscreen().catch(() => {})
+  }
+
+  function beginBackupLink(
+    event: ReactMouseEvent<HTMLButtonElement>,
+    backupId: number,
+    side: RoleLinkSide,
+    mode?: RoleRelationMode
+  ) {
+    if (isBackupGraphSpacePressed || isBackupGraphPanning) return
+    event.preventDefault()
+    event.stopPropagation()
+    const nextMode = mode ?? backupActiveRelationMode
+    setBackupActiveRelationMode(nextMode)
+    const pointer = getBackupGraphPointFromClient(event.clientX, event.clientY)
+    if (!pointer) return
+    setBackupRelationMenu({ open: false, x: 0, y: 0, relationId: null })
+    setBackupNodeMenu({ open: false, x: 0, y: 0, backupId: null })
+    const nextTarget = getBackupLinkTargetByPoint(pointer, backupId)
+    setBackupLinkStart({ backupId, side, mode: nextMode })
+    setBackupLinkTarget(nextTarget)
+    if (nextTarget) {
+      const nextPosition = backupPositionById.get(nextTarget.backupId)
+      if (nextPosition) {
+        setBackupLinkPreview(getBackupSidePoint(nextPosition, nextTarget.side))
+        return
+      }
+    }
+    setBackupLinkPreview(pointer)
+  }
+
+  function beginBackupRelationCurveDrag(event: ReactMouseEvent<SVGCircleElement>, relationId: number) {
+    if (event.button !== 0) return
+    event.preventDefault()
+    event.stopPropagation()
+    setDraggingBackupRelationCurve({ relationId })
+    setBackupRelationMenu({ open: false, x: 0, y: 0, relationId: null })
+  }
+
+  function updateOrCreateBackupRelation(
+    fromId: number,
+    toId: number,
+    fromAnchor: RoleLinkSide,
+    toAnchor: RoleLinkSide,
+    mode: RoleRelationMode = DEFAULT_ROLE_RELATION_MODE
+  ) {
+    if (fromId === toId) return
+    const strokeColor = normalizeRelationColor(
+      backupActiveRelationStrokeColor,
+      DEFAULT_BACKUP_RELATION_STROKE_COLOR
+    )
+    const labelColor = normalizeRelationColor(
+      backupActiveRelationLabelColor,
+      DEFAULT_BACKUP_RELATION_LABEL_COLOR
+    )
+    const index = backupRelations.findIndex(
+      (relation) => relation.fromBackupId === fromId && relation.toBackupId === toId
+    )
+    const nextRelations =
+      index >= 0
+        ? backupRelations.map((relation, relationIndex) =>
+            relationIndex === index
+              ? {
+                  ...relation,
+                  fromBackupId: fromId,
+                  toBackupId: toId,
+                  fromAnchor,
+                  toAnchor,
+                  mode,
+                  strokeColor,
+                  labelColor
+                }
+              : relation
+          )
+        : [
+            ...backupRelations,
+            {
+              id: Date.now(),
+              fromBackupId: fromId,
+              toBackupId: toId,
+              fromAnchor,
+              toAnchor,
+              curveOffsetX: 0,
+              curveOffsetY: 0,
+              mode,
+              causal: '因果',
+              strokeColor,
+              labelColor,
+              createdAt: nowLabel()
+            }
+          ]
+    setBackupRelations(nextRelations)
+  }
+
+  function openBackupNodeContextMenu(event: ReactMouseEvent<HTMLElement>, backupId: number) {
+    event.preventDefault()
+    event.stopPropagation()
+    setSelectedBackupId(backupId)
+    setBackupNodeMenu({
+      open: true,
+      x: event.clientX,
+      y: event.clientY,
+      backupId
+    })
+    if (backupRelationMenu.open) {
+      setBackupRelationMenu({ open: false, x: 0, y: 0, relationId: null })
+    }
+  }
+
+  function openBackupEditor(backupId: number) {
+    const current = backups.find((item) => item.id === backupId)
+    if (!current) return
+    setBackupEditorDialog({
+      backupId,
+      title: current.title,
+      content: current.content
+    })
+    if (backupNodeMenu.open) {
+      setBackupNodeMenu({ open: false, x: 0, y: 0, backupId: null })
+    }
+  }
+
+  function closeBackupEditor() {
+    setBackupEditorDialog(null)
+  }
+
+  function commitBackupEditor() {
+    if (!backupEditorDialog) return
+    updateBackup(backupEditorDialog.backupId, {
+      title: backupEditorDialog.title.trim() || '新事件',
+      content: backupEditorDialog.content
+    })
+    setBackupEditorDialog(null)
+    setStatus('事件卡已更新')
+  }
+
+  function openBackupRelationContextMenu(event: ReactMouseEvent<SVGElement>, relationId: number) {
+    event.preventDefault()
+    event.stopPropagation()
+    setBackupRelationMenu({
+      open: true,
+      x: event.clientX,
+      y: event.clientY,
+      relationId
+    })
+  }
+
+  function editBackupRelation(relationId: number) {
+    const current = backupRelations.find((item) => item.id === relationId)
+    if (!current) return
+    setBackupRelationEditorDialog({
+      relationId,
+      causal: current.causal || '因果'
+    })
+    setBackupRelationMenu({ open: false, x: 0, y: 0, relationId: null })
+  }
+
+  function removeBackupRelation(relationId: number) {
+    setBackupRelations((previous) => previous.filter((item) => item.id !== relationId))
+    setBackupRelationMenu({ open: false, x: 0, y: 0, relationId: null })
+    setBackupRelationEditorDialog((previous) =>
+      previous && previous.relationId === relationId ? null : previous
+    )
+  }
+
+  function closeBackupRelationEditor() {
+    setBackupRelationEditorDialog(null)
+  }
+
+  function commitBackupRelationEditor() {
+    if (!backupRelationEditorDialog) return
+    const nextCausal = backupRelationEditorDialog.causal.trim() || '因果'
+    setBackupRelations((previous) =>
+      previous.map((item) =>
+        item.id === backupRelationEditorDialog.relationId
+          ? { ...item, causal: nextCausal }
+          : item
+      )
+    )
+    setBackupRelationEditorDialog(null)
+    setStatus('事件因果已更新')
+  }
+
+  function handleBackupGraphMouseMove(event: ReactMouseEvent<HTMLDivElement>) {
+    if (isBackupGraphPanning) {
+      const start = backupGraphPanStartRef.current
+      if (!start) return
+      setBackupGraphViewport((previous) => ({
+        ...previous,
+        x: start.originX + (event.clientX - start.clientX),
+        y: start.originY + (event.clientY - start.clientY)
+      }))
+      return
+    }
+    const pointer = getBackupGraphPointFromClient(event.clientX, event.clientY)
+    if (!pointer) return
+    if (draggingBackupRelationCurve !== null) {
+      const relation = backupRelationsRef.current.find(
+        (item) => item.id === draggingBackupRelationCurve.relationId
+      )
+      if (!relation) return
+      const geometry = getBackupRelationGeometry(relation)
+      if (!geometry) return
+      const nextOffset = getBackupRelationCurveOffsetFromMidpoint(
+        pointer,
+        geometry.fromPoint,
+        geometry.toPoint
+      )
+      setBackupRelations((previous) => {
+        const nextRelations = previous.map((item) =>
+          item.id === draggingBackupRelationCurve.relationId
+            ? {
+                ...item,
+                curveOffsetX: nextOffset.x,
+                curveOffsetY: nextOffset.y
+              }
+            : item
+        )
+        backupRelationsRef.current = nextRelations
+        return nextRelations
+      })
+      return
+    }
+    if (backupLinkStart !== null) {
+      const nextTarget = getBackupLinkTargetByPoint(pointer, backupLinkStart.backupId)
+      setBackupLinkTarget(nextTarget)
+      if (nextTarget) {
+        const nextPosition = backupPositionById.get(nextTarget.backupId)
+        if (nextPosition) {
+          setBackupLinkPreview(getBackupSidePoint(nextPosition, nextTarget.side))
+        } else {
+          setBackupLinkPreview(pointer)
+        }
+      } else {
+        setBackupLinkPreview(pointer)
+      }
+    }
+    if (draggingBackupId === null) return
+    const nextX = Math.max(0, pointer.x - backupDragOffset.x)
+    const nextY = Math.max(0, pointer.y - backupDragOffset.y)
+    updateBackup(draggingBackupId, { backupX: nextX, backupY: nextY })
+  }
+
+  function handleBackupGraphMouseUp(event: ReactMouseEvent<HTMLDivElement>) {
+    const wasPanning = isBackupGraphPanning
+    if (isBackupGraphPanning) {
+      setIsBackupGraphPanning(false)
+      backupGraphPanStartRef.current = null
+    }
+    if (wasPanning) return
+    if (draggingBackupRelationCurve !== null) {
+      setDraggingBackupRelationCurve(null)
+      return
+    }
+    if (draggingBackupId !== null) {
+      setDraggingBackupId(null)
+    }
+    if (backupLinkStart === null) return
+    const pointer = getBackupGraphPointFromClient(event.clientX, event.clientY)
+    const finalTarget =
+      pointer !== null ? getBackupLinkTargetByPoint(pointer, backupLinkStart.backupId) : null
+    if (finalTarget && finalTarget.backupId !== backupLinkStart.backupId) {
+      updateOrCreateBackupRelation(
+        backupLinkStart.backupId,
+        finalTarget.backupId,
+        backupLinkStart.side,
+        finalTarget.side,
+        backupLinkStart.mode
+      )
+    }
+    setBackupLinkStart(null)
+    setBackupLinkTarget(null)
+    setBackupLinkPreview(null)
   }
 
   function jumpToMemory(memoryItem: MemoryItem) {
@@ -4105,10 +6804,21 @@ function App() {
       .filter(Boolean)
     const relationItems = roleRelations
       .map((relation) => {
-        const fromName = roleNameById.get(relation.fromMemoryId)
-        const toName = roleNameById.get(relation.toMemoryId)
-        if (!fromName || !toName) return ''
-        return `角色关系：${fromName} ↔ ${toName}${relation.relation.trim() ? `（${relation.relation.trim()}）` : ''}`
+        const fromRole = roleMemoryById.get(relation.fromMemoryId)
+        const toRole = roleMemoryById.get(relation.toMemoryId)
+        if (!fromRole || !toRole) return ''
+        const fromName = getRoleName(fromRole)
+        const toName = getRoleName(toRole)
+        const fromStance = getRoleStance(fromRole)
+        const toStance = getRoleStance(toRole)
+        const mode = parseRoleRelationMode(relation.mode)
+        const relationText = getRoleRelationDisplayText(relation)
+        const intimacy = normalizeRelationIntimacy(relation.intimacy ?? 0)
+        const tags = Array.isArray(relation.tags) && relation.tags.length > 0 ? `；标签：${relation.tags.join('、')}` : ''
+        if (isRoleRelationBidirectional(mode)) {
+          return `角色关系：${fromName}（立场 ${fromStance}/10-${getRoleStanceLabel(fromStance)}） 与 ${toName}（立场 ${toStance}/10-${getRoleStanceLabel(toStance)}）互为 ${relationText}（亲密度 ${intimacy}，${getRoleIntimacyLabel(intimacy)}${tags}）`
+        }
+        return `角色关系：${fromName}（立场 ${fromStance}/10-${getRoleStanceLabel(fromStance)}） 对 ${toName}（立场 ${toStance}/10-${getRoleStanceLabel(toStance)}）${relationText}（亲密度 ${intimacy}，${getRoleIntimacyLabel(intimacy)}${tags}）`
       })
       .filter(Boolean)
     const memoryItems = [...infoMemoryItems, ...roleMemoryItems, ...relationItems]
@@ -4259,7 +6969,8 @@ function App() {
       setConnectionState('failed')
       setStatus('连接失败')
       if (isAuto) {
-        window.alert(`模型自动连接失败：${message}`)
+        console.error('模型自动连接失败', err)
+        window.alert('当前推理模型没有成功加载，请检查模型接口或者本地模型是否启动')
       }
     } finally {
       setIsRunning(false)
@@ -4498,28 +7209,72 @@ ${message}`
       const action = editor.getAction('editor.action.addSelectionToNextFindMatch')
       if (action) void action.run()
     })
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyA, () => {
+      editor.focus()
+      editor.trigger('keyboard', 'editor.action.selectAll', null)
+    })
 
     editor.onDidChangeCursorSelection(() => {
       refreshSelectionState()
     })
-    editor.onDidChangeModelContent(() => {
+    editor.onDidChangeModelContent((event) => {
       refreshSelectionState()
+      if (shouldRefreshScriptDecorationsFromChange(event)) {
+        scheduleScriptLineDecorations()
+      }
+      syncScriptRolesFromContentChanges(event)
     })
     editor.onDidBlurEditorWidget(() => {
       closeEditorContextMenu()
     })
     editor.onDidScrollChange(() => {
       closeEditorContextMenu()
+      closeScriptRolePicker()
     })
     editor.onContextMenu((event) => {
       event.event.preventDefault()
       event.event.stopPropagation()
       refreshSelectionState()
+      closeScriptRolePicker()
       const browserEvent = event.event.browserEvent
       openEditorContextMenu(browserEvent.clientX, browserEvent.clientY)
     })
+    editor.onMouseDown((event) => {
+      if (activeVersionWritingModeRef.current !== 'script') return
+      const position = event.target.position
+      if (!position) return
+      const prefix = getScriptPrefixAtPosition(position.lineNumber, position.column)
+      if (!prefix) return
+      event.event.preventDefault()
+      event.event.stopPropagation()
+      const browserEvent = event.event.browserEvent
+      openScriptRolePickerAt(prefix, browserEvent.clientX, browserEvent.clientY)
+    })
+
+    const domNode = editor.getDomNode()
+    if (domNode) {
+      const onCopy = (event: ClipboardEvent) => {
+        if (activeVersionWritingModeRef.current !== 'script') return
+        const model = editor.getModel()
+        if (!model) return
+        const selections = editor.getSelections() ?? []
+        const text = selections
+          .filter((selection) => selection && !selection.isEmpty())
+          .map((selection) => model.getValueInRange(selection))
+          .join('\n')
+        if (!text) return
+        const normalized = normalizeScriptClipboardText(text)
+        event.preventDefault()
+        event.clipboardData?.setData('text/plain', normalized)
+      }
+      domNode.addEventListener('copy', onCopy, true)
+      editor.onDidDispose(() => {
+        domNode.removeEventListener('copy', onCopy, true)
+      })
+    }
 
     refreshSelectionState()
+    scheduleScriptLineDecorations()
   }
 
   if (activeScreen === 'projects') {
@@ -5015,96 +7770,97 @@ ${message}`
                   {t('全部项目 >', 'All Projects >')}
                 </button>
               </header>
-
-              <ul className="project-recent-list">
-                {recentProjects.map((project, index) => (
-                  <li key={project.id}>
-                    <div className={`project-cover project-cover-${(index % 6) + 1}`} aria-hidden="true" />
-                    <div className="project-recent-meta">
-                      <strong>{project.name}</strong>
-                      <small>
-                        {appLanguage === 'en-US'
-                          ? `Updated ${project.updatedAt}`
-                          : `更新于 ${project.updatedAt}`}
-                      </small>
-                    </div>
-                    <div className="project-item-actions">
-                      <button
-                        className={`text-button ${
-                          project.id === activeProjectId ? 'project-resume-button' : ''
-                        }`}
-                        onClick={() => {
-                          setProjectActionMenuId(null)
-                          openProject(project.id)
-                        }}
-                      >
-                        {project.id === activeProjectId ? t('继续', 'Resume') : t('打开', 'Open')}
-                      </button>
-                      <div className="project-item-menu">
-                        <button
-                          aria-expanded={projectActionMenuId === project.id}
-                          className="text-button project-item-menu-trigger"
-                          onClick={() =>
-                            setProjectActionMenuId((current) =>
-                              current === project.id ? null : project.id
-                            )
-                          }
-                          title={t('更多操作', 'More actions')}
-                          type="button"
-                        >
-                          ⋯
-                        </button>
-                        {projectActionMenuId === project.id && (
-                          <div className="project-item-menu-dropdown" role="menu">
-                            <button
-                              className="text-button"
-                              disabled={renamingProjectId === project.id}
-                              onClick={() => {
-                                setProjectActionMenuId(null)
-                                requestRenameProject(project)
-                              }}
-                              type="button"
-                            >
-                              {renamingProjectId === project.id
-                                ? t('重命名中...', 'Renaming...')
-                                : t('重命名', 'Rename')}
-                            </button>
-                            <button
-                              className="text-button"
-                              disabled={!hasDesktopProjectStorage}
-                              onClick={() => {
-                                setProjectActionMenuId(null)
-                                void openProjectFiles(project)
-                              }}
-                              type="button"
-                            >
-                              {t('查看文件', 'View Files')}
-                            </button>
-                            <button
-                              className="text-button danger"
-                              disabled={deletingProjectId === project.id}
-                              onClick={() => {
-                                setProjectActionMenuId(null)
-                                requestDeleteProject(project)
-                              }}
-                              type="button"
-                            >
-                              {deletingProjectId === project.id
-                                ? t('删除中...', 'Deleting...')
-                                : t('删除', 'Delete')}
-                            </button>
-                          </div>
-                        )}
+              <div className={`project-recent-body ${!recentProjects.length ? 'is-empty' : ''}`}>
+                <ul className="project-recent-list">
+                  {recentProjects.map((project, index) => (
+                    <li key={project.id}>
+                      <div className={`project-cover project-cover-${(index % 6) + 1}`} aria-hidden="true" />
+                      <div className="project-recent-meta">
+                        <strong>{project.name}</strong>
+                        <small>
+                          {appLanguage === 'en-US'
+                            ? `Updated ${project.updatedAt}`
+                            : `更新于 ${project.updatedAt}`}
+                        </small>
                       </div>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-              {!recentProjects.length && (
-                <p className="empty-tip">
-                  {t('还没有项目，先在左侧创建一个。', 'No projects yet. Create one from the left panel.')}
-                </p>
-              )}
+                      <div className="project-item-actions">
+                        <button
+                          className={`text-button ${
+                            project.id === activeProjectId ? 'project-resume-button' : ''
+                          }`}
+                          onClick={() => {
+                            setProjectActionMenuId(null)
+                            openProject(project.id)
+                          }}
+                        >
+                          {project.id === activeProjectId ? t('继续', 'Resume') : t('打开', 'Open')}
+                        </button>
+                        <div className="project-item-menu">
+                          <button
+                            aria-expanded={projectActionMenuId === project.id}
+                            className="text-button project-item-menu-trigger"
+                            onClick={() =>
+                              setProjectActionMenuId((current) =>
+                                current === project.id ? null : project.id
+                              )
+                            }
+                            title={t('更多操作', 'More actions')}
+                            type="button"
+                          >
+                            ⋯
+                          </button>
+                          {projectActionMenuId === project.id && (
+                            <div className="project-item-menu-dropdown" role="menu">
+                              <button
+                                className="text-button"
+                                disabled={renamingProjectId === project.id}
+                                onClick={() => {
+                                  setProjectActionMenuId(null)
+                                  requestRenameProject(project)
+                                }}
+                                type="button"
+                              >
+                                {renamingProjectId === project.id
+                                  ? t('重命名中...', 'Renaming...')
+                                  : t('重命名', 'Rename')}
+                              </button>
+                              <button
+                                className="text-button"
+                                disabled={!hasDesktopProjectStorage}
+                                onClick={() => {
+                                  setProjectActionMenuId(null)
+                                  void openProjectFiles(project)
+                                }}
+                                type="button"
+                              >
+                                {t('查看文件', 'View Files')}
+                              </button>
+                              <button
+                                className="text-button danger"
+                                disabled={deletingProjectId === project.id}
+                                onClick={() => {
+                                  setProjectActionMenuId(null)
+                                  requestDeleteProject(project)
+                                }}
+                                type="button"
+                              >
+                                {deletingProjectId === project.id
+                                  ? t('删除中...', 'Deleting...')
+                                  : t('删除', 'Delete')}
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+                {!recentProjects.length && (
+                  <p className="project-recent-empty-tip">
+                    {t('还没有项目，先在左侧创建一个。', 'No projects yet. Create one from the left panel.')}
+                  </p>
+                )}
+              </div>
               {hasDesktopProjectImport && (
                 <button
                   className="text-button project-import-button"
@@ -5466,6 +8222,9 @@ ${message}`
               <span>{t('让AI写作更可控', 'Make AI Writing More Controllable')}</span>
             </div>
           </div>
+          <div className="menu-project-name" title={activeProject?.name ?? ''}>
+            {activeProject?.name ?? ''}
+          </div>
           <div className="menu-bar-right">
             <div className="window-status">{status}</div>
             {hasDesktopWindowControls && (
@@ -5626,7 +8385,7 @@ ${message}`
                         className={writingMode === 'novel' ? 'active' : ''}
                         type="button"
                         onClick={() => {
-                          setWritingMode('novel')
+                          setActiveVersionMode('novel')
                           setStatus('已切换到小说模式')
                         }}
                       >
@@ -5636,7 +8395,7 @@ ${message}`
                         className={writingMode === 'script' ? 'active' : ''}
                         type="button"
                         onClick={() => {
-                          setWritingMode('script')
+                          setActiveVersionMode('script')
                           syncScriptRolesToMemory(currentDraft)
                           setStatus('已切换到剧本模式')
                         }}
@@ -5795,17 +8554,19 @@ ${message}`
                 <header className="assistant-chat-header" onMouseDown={startAssistantDialogDrag}>
                   <strong>写作小助手</strong>
                   <button
-                    className="text-button"
+                    className="assistant-chat-close"
                     onClick={() => setAssistantOpen(false)}
+                    title="关闭"
+                    aria-label="关闭写作小助手"
                     type="button"
                   >
-                    关闭
+                    ×
                   </button>
                 </header>
                 <div className="assistant-chat-messages" ref={assistantMessagesViewportRef}>
                   {assistantMessages.length === 0 ? (
                     <p className="assistant-chat-empty">
-                      直接告诉我你想怎么改当前版本，我会先和你沟通，再按要求更新正文。
+                      仅对当前版本有效，可对剧本做整体修改（比如让本章剧情更曲折、让本章篇幅更简洁等），局部修改使用润色、扩写等功能效果更好。
                     </p>
                   ) : (
                     assistantMessages.map((item) => (
@@ -5837,7 +8598,7 @@ ${message}`
                     }}
                   />
                   <button
-                    className="primary-button"
+                    className="primary-button assistant-chat-send"
                     disabled={assistantRunning || !assistantInput.trim()}
                     onClick={() => void sendAssistantMessage()}
                     type="button"
@@ -5939,34 +8700,65 @@ ${message}`
                   >
                     搜索
                   </button>
-                  <input
-                    id="memory-search-input"
-                    className="memory-search-input"
-                    type="text"
-                    value={memorySearchQuery}
-                    onChange={(event) => setMemorySearchQuery(event.target.value)}
-                    placeholder={
-                      memoryModule === 'role'
-                        ? '输入关键词实时搜索角色'
-                        : '输入关键词实时搜索信息记忆'
-                    }
-                  />
+                  <div className="memory-search-input-wrap">
+                    <input
+                      id="memory-search-input"
+                      className="memory-search-input"
+                      type="text"
+                      value={memorySearchQuery}
+                      onChange={(event) => setMemorySearchQuery(event.target.value)}
+                      placeholder={
+                        memoryModule === 'role'
+                          ? '输入关键词实时搜索角色'
+                          : '输入关键词实时搜索信息记忆'
+                      }
+                    />
+                    {memorySearchQuery.trim() ? (
+                      <button
+                        aria-label="清空搜索"
+                        className="memory-search-clear"
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => {
+                          setMemorySearchQuery('')
+                          const input = document.getElementById('memory-search-input')
+                          if (input instanceof HTMLInputElement) input.focus()
+                        }}
+                        type="button"
+                      >
+                        x
+                      </button>
+                    ) : null}
+                  </div>
                 </div>
                 {memoryModule === 'role' && roleGraphView === 'graph' ? (
                   <div
                     className={`role-graph-board${isRoleGraphSpacePressed ? ' is-space' : ''}${isRoleGraphPanning ? ' is-panning' : ''}`}
                     onMouseDown={beginRoleGraphPan}
                     onMouseMove={handleRoleGraphMouseMove}
-                onMouseUp={handleRoleGraphMouseUp}
-                onDoubleClick={handleRoleGraphDoubleClick}
-                onWheel={handleRoleGraphWheel}
-                onAuxClick={(event) => {
-                  if (event.button === 1) event.preventDefault()
-                }}
-                ref={roleGraphBoardRef}
-                style={roleGraphBoardStyle}
-              >
-                    {isRoleGraphFullscreen && (
+                    onMouseUp={handleRoleGraphMouseUp}
+                    onDoubleClick={handleRoleGraphDoubleClick}
+                    onWheel={handleRoleGraphWheel}
+                    onAuxClick={(event) => {
+                      if (event.button === 1) event.preventDefault()
+                    }}
+                    onContextMenu={(event) => {
+                      const target = event.target
+                      if (
+                        target instanceof Element &&
+                        target.closest('.role-graph-node, .role-graph-edge, .role-relation-menu, .role-node-menu')
+                      ) {
+                        return
+                      }
+                      if (roleRelationMenu.open || roleNodeMenu.open) {
+                        event.preventDefault()
+                        setRoleRelationMenu({ open: false, x: 0, y: 0, relationId: null })
+                        setRoleNodeMenu({ open: false, x: 0, y: 0, roleId: null })
+                      }
+                    }}
+                    ref={roleGraphBoardRef}
+                    style={roleGraphBoardStyle}
+                  >
+                    {isRoleGraphBoardFullscreen && (
                       <button
                         className="text-button role-graph-exit-button"
                         onClick={() => void toggleRoleGraphFullscreen()}
@@ -5977,40 +8769,74 @@ ${message}`
                     )}
                     <div className="role-graph-viewport" style={roleGraphViewportStyle}>
                       <svg className="role-graph-lines" width="100%" height="100%">
+                        <defs>
+                          <marker
+                            id="role-graph-arrowhead"
+                            viewBox="0 0 10 10"
+                            refX="9"
+                            refY="5"
+                            markerWidth="7"
+                            markerHeight="7"
+                            orient="auto-start-reverse"
+                          >
+                            <path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke" stroke="context-stroke" />
+                          </marker>
+                        </defs>
                         {visibleRoleRelations.map((relation) => {
-                          const fromPos = visibleRolePositionById.get(relation.fromMemoryId)
-                          const toPos = visibleRolePositionById.get(relation.toMemoryId)
-                          if (!fromPos || !toPos) return null
-                          const fromAnchor =
-                            relation.fromAnchor ?? pickDefaultRoleCorner(fromPos, toPos)
-                          const toAnchor = relation.toAnchor ?? pickDefaultRoleSide(fromPos, toPos)
-                          const fromPoint = getRoleCornerPoint(fromPos, fromAnchor)
-                          const toPoint = getRoleSidePoint(toPos, toAnchor)
-                          const x1 = fromPoint.x
-                          const y1 = fromPoint.y
-                          const x2 = toPoint.x
-                          const y2 = toPoint.y
-                          const midX = (x1 + x2) / 2
-                          const midY = (y1 + y2) / 2
+                          const geometry = getRoleRelationGeometry(relation)
+                          if (!geometry) return null
+                          const relationMode = parseRoleRelationMode(relation.mode)
+                          const dashed = isRoleRelationDashed(relationMode)
+                          const bidirectional = isRoleRelationBidirectional(relationMode)
+                          const relationStrokeColor = normalizeRelationColor(
+                            relation.strokeColor,
+                            DEFAULT_ROLE_RELATION_STROKE_COLOR
+                          )
+                          const relationHovered =
+                            hoveredRoleRelationId === relation.id ||
+                            draggingRoleRelationCurve?.relationId === relation.id
+                          const relationIsDirectFocus =
+                            focusedRoleId !== null &&
+                            (relation.fromMemoryId === focusedRoleId ||
+                              relation.toMemoryId === focusedRoleId)
                           return (
-                            <g key={relation.id} className="role-graph-edge">
-                              <line
-                                x1={x1}
-                                y1={y1}
-                                x2={x2}
-                                y2={y2}
+                            <g
+                              key={relation.id}
+                              className={`role-graph-edge${relationHovered ? ' is-hovered' : ''}${draggingRoleRelationCurve?.relationId === relation.id ? ' is-dragging' : ''}${shouldDimRoleGraph && !relationIsDirectFocus ? ' is-dimmed' : ''}`}
+                              onMouseEnter={() => setHoveredRoleRelationId(relation.id)}
+                              onMouseLeave={() =>
+                                setHoveredRoleRelationId((previous) =>
+                                  previous === relation.id ? null : previous
+                                )
+                              }
+                            >
+                              <path
+                                className="role-graph-edge-path"
+                                d={geometry.path}
+                                style={{ stroke: relationStrokeColor }}
+                                strokeDasharray={dashed ? '6 4' : undefined}
+                                markerEnd="url(#role-graph-arrowhead)"
+                                markerStart={bidirectional ? 'url(#role-graph-arrowhead)' : undefined}
                                 onDoubleClick={() => editRoleRelation(relation.id)}
                                 onContextMenu={(event) =>
                                   openRoleRelationContextMenu(event, relation.id)
                                 }
                               />
+                              <circle
+                                className="role-graph-edge-handle"
+                                cx={geometry.curveMidPoint.x}
+                                cy={geometry.curveMidPoint.y}
+                                style={{ stroke: relationStrokeColor }}
+                                onMouseDown={(event) => beginRoleRelationCurveDrag(event, relation.id)}
+                                r={9}
+                              />
                               <text
-                                x={midX}
-                                y={midY - 6}
+                                x={geometry.curveMidPoint.x}
+                                y={geometry.curveMidPoint.y - 12}
                                 onDoubleClick={() => editRoleRelation(relation.id)}
                                 onContextMenu={(event) => openRoleRelationContextMenu(event, relation.id)}
                               >
-                                {relation.relation || '双击输入关系'}
+                                {getRoleRelationDisplayText(relation)}
                               </text>
                             </g>
                           )
@@ -6019,7 +8845,9 @@ ${message}`
                           (() => {
                             const startPos = visibleRolePositionById.get(roleLinkStart.roleId)
                             if (!startPos) return null
-                            const startPoint = getRoleCornerPoint(startPos, roleLinkStart.corner)
+                            const startPoint = getRoleSidePoint(startPos, roleLinkStart.side)
+                            const previewDashed = isRoleRelationDashed(roleLinkStart.mode)
+                            const previewBidirectional = isRoleRelationBidirectional(roleLinkStart.mode)
                             return (
                               <line
                                 className="role-graph-preview-line"
@@ -6027,28 +8855,55 @@ ${message}`
                                 y1={startPoint.y}
                                 x2={roleLinkPreview.x}
                                 y2={roleLinkPreview.y}
+                                strokeDasharray={previewDashed ? '6 4' : undefined}
+                                markerEnd="url(#role-graph-arrowhead)"
+                                markerStart={
+                                  previewBidirectional ? 'url(#role-graph-arrowhead)' : undefined
+                                }
+                                style={{
+                                  stroke: normalizeRelationColor(
+                                    activeRoleRelationStrokeColor,
+                                    DEFAULT_ROLE_RELATION_STROKE_COLOR
+                                  )
+                                }}
                               />
                             )
                           })()
                         ) : null}
                       </svg>
+                      {roleSelectionBounds && (
+                        <div
+                          className="role-graph-selection-box"
+                          style={{
+                            left: roleSelectionBounds.minX,
+                            top: roleSelectionBounds.minY,
+                            width: roleSelectionBounds.width,
+                            height: roleSelectionBounds.height
+                          }}
+                        />
+                      )}
                       {visibleRoleMemory.map((item, index) => {
                         const position = visibleRolePositionById.get(item.id) ?? getRoleNodePosition(item, index)
                         const roleName = getRoleName(item)
                         const roleNote = getRoleNote(item)
                         const roleStance = getRoleStance(item)
+                        const roleEmoji = getRoleStanceEmoji(roleStance)
+                        const roleNodeToneStyle = getRoleNodeToneStyle(roleStance)
                         const showHandles =
                           hoveredRoleId === item.id || roleLinkStart?.roleId === item.id
+                        const isDirectRoleNode =
+                          !shouldDimRoleGraph || directlyConnectedRoleIds.has(item.id)
                         const linkTargetForNode =
                           roleLinkStart !== null && roleLinkTarget?.roleId === item.id
                             ? roleLinkTarget
                             : null
                         return (
                           <article
-                            className={`role-graph-node ${draggingRoleId === item.id ? 'dragging' : ''}${showHandles ? ' show-handles' : ''}`}
+                            className={`role-graph-node ${draggingRoleId === item.id ? 'dragging' : ''}${showHandles ? ' show-handles' : ''}${selectedRoleIds.has(item.id) ? ' selected' : ''}${!isDirectRoleNode ? ' is-dimmed' : ''}`}
                             data-role-id={item.id}
                             key={item.id}
                             onMouseDown={(event) => beginRoleDrag(event, item.id)}
+                            onContextMenu={(event) => openRoleNodeContextMenu(event, item.id)}
                             onDoubleClick={(event) => {
                               event.preventDefault()
                               event.stopPropagation()
@@ -6058,19 +8913,54 @@ ${message}`
                             onMouseLeave={() =>
                               setHoveredRoleId((previous) => (previous === item.id ? null : previous))
                             }
-                            style={{ left: position.x, top: position.y }}
+                            style={{
+                              left: position.x,
+                              top: position.y,
+                              ...roleNodeToneStyle
+                            }}
                           >
-                            {ROLE_LINK_CORNERS.map((corner) => (
+                            {ROLE_LINK_SIDES.map((side) => (
                               <button
-                                className={`role-link-handle corner-${corner}`}
-                                key={corner}
-                                onMouseDown={(event) => beginRoleLink(event, item.id, corner)}
-                                title="拖动到另一个角色建立关系"
+                                className={`role-link-handle side-${side}`}
+                                key={side}
+                                onMouseDown={(event) => beginRoleLink(event, item.id, side)}
+                                title={`拖动建立${getRoleRelationModeText(activeRoleRelationMode)}关系`}
                                 type="button"
                               >
                                 ●
                               </button>
                             ))}
+                            {showHandles && (
+                              <div className="role-link-mode-picker" onMouseDown={(event) => event.stopPropagation()}>
+                                {ROLE_RELATION_MODE_OPTIONS.map((option) => (
+                                  <button
+                                    className={`role-link-mode-option${activeRoleRelationMode === option.mode ? ' active' : ''}`}
+                                    key={option.mode}
+                                    onClick={(event) => {
+                                      event.preventDefault()
+                                      event.stopPropagation()
+                                      setActiveRoleRelationMode(option.mode)
+                                    }}
+                                    title={option.label}
+                                    type="button"
+                                  >
+                                    {option.icon}
+                                  </button>
+                                ))}
+                                <label className="relation-color-control" title="线条颜色">
+                                  <input
+                                    className="relation-color-input"
+                                    type="color"
+                                    aria-label="线条颜色"
+                                    value={activeRoleRelationStrokeColor}
+                                    onChange={(event) => {
+                                      event.stopPropagation()
+                                      setActiveRoleRelationStrokeColor(event.target.value)
+                                    }}
+                                  />
+                                </label>
+                              </div>
+                            )}
                             {linkTargetForNode && (
                               <span
                                 className={`role-link-target-indicator side-${linkTargetForNode.side}`}
@@ -6078,6 +8968,9 @@ ${message}`
                                 ●
                               </span>
                             )}
+                            <span className="role-node-stance-emoji" title={`立场：${roleStance}/10`}>
+                              {roleEmoji}
+                            </span>
                             <h4
                               onDoubleClick={() => openRoleEditor(item)}
                               title="双击编辑角色信息"
@@ -6093,42 +8986,404 @@ ${message}`
                     <button
                       className="role-graph-corner-fullscreen"
                       onClick={() => void toggleRoleGraphFullscreen()}
-                      title={isRoleGraphFullscreen ? '退出全屏' : '全屏'}
+                      title={isRoleGraphBoardFullscreen ? '退出全屏' : '全屏'}
                       type="button"
                     >
-                      {isRoleGraphFullscreen ? '⤡' : '⛶'}
+                      {isRoleGraphBoardFullscreen ? '⤡' : '⛶'}
                     </button>
+                    <button
+                      className="text-button role-graph-visual-button"
+                      onMouseDown={(event) => event.stopPropagation()}
+                      onClick={(event) => {
+                        event.preventDefault()
+                        event.stopPropagation()
+                        setIsRoleGraphVisualDialogOpen((previous) => !previous)
+                      }}
+                      title="脑图视觉设置"
+                      type="button"
+                    >
+                      ⚙
+                    </button>
+                    {isRoleGraphVisualDialogOpen && (
+                      <div
+                        className="graph-visual-panel"
+                        onMouseDown={(event) => event.stopPropagation()}
+                      >
+                        <h4>脑图设置</h4>
+                        <label>
+                          <span>背景色</span>
+                          <input
+                            aria-label="角色脑图背景色"
+                            type="color"
+                            value={roleGraphVisual.backgroundColor}
+                            onChange={(event) =>
+                              setRoleGraphVisual((previous) => ({
+                                ...previous,
+                                backgroundColor: normalizeRelationColor(
+                                  event.target.value,
+                                  DEFAULT_ROLE_GRAPH_BG_COLOR
+                                )
+                              }))
+                            }
+                          />
+                        </label>
+                        <label>
+                          <span>{`字体大小 ${roleGraphVisual.fontSize}px`}</span>
+                          <div className="graph-visual-size-row">
+                            <input
+                              aria-label="角色脑图字体大小滑杆"
+                              max={GRAPH_FONT_SIZE_MAX}
+                              min={GRAPH_FONT_SIZE_MIN}
+                              type="range"
+                              value={roleGraphVisual.fontSize}
+                              onChange={(event) => {
+                                const nextSize = clampNumber(
+                                  Number(event.target.value) || DEFAULT_GRAPH_FONT_SIZE,
+                                  GRAPH_FONT_SIZE_MIN,
+                                  GRAPH_FONT_SIZE_MAX
+                                )
+                                setRoleGraphVisual((previous) => ({
+                                  ...previous,
+                                  fontSize: Math.round(nextSize)
+                                }))
+                              }}
+                            />
+                            <input
+                              aria-label="角色脑图字体大小数值"
+                              max={GRAPH_FONT_SIZE_MAX}
+                              min={GRAPH_FONT_SIZE_MIN}
+                              type="number"
+                              value={roleGraphVisual.fontSize}
+                              onChange={(event) => {
+                                const nextSize = clampNumber(
+                                  Number(event.target.value) || DEFAULT_GRAPH_FONT_SIZE,
+                                  GRAPH_FONT_SIZE_MIN,
+                                  GRAPH_FONT_SIZE_MAX
+                                )
+                                setRoleGraphVisual((previous) => ({
+                                  ...previous,
+                                  fontSize: Math.round(nextSize)
+                                }))
+                              }}
+                            />
+                          </div>
+                        </label>
+                        <label>
+                          <span>{`弱化透明度 ${roleGraphVisual.dimmedOpacity.toFixed(2)}`}</span>
+                          <div className="graph-visual-size-row">
+                            <input
+                              aria-label="角色脑图弱化透明度滑杆"
+                              max={GRAPH_DIMMED_OPACITY_MAX}
+                              min={GRAPH_DIMMED_OPACITY_MIN}
+                              step={0.01}
+                              type="range"
+                              value={roleGraphVisual.dimmedOpacity}
+                              onChange={(event) => {
+                                const nextOpacity = clampNumber(
+                                  Number(event.target.value) || DEFAULT_GRAPH_DIMMED_OPACITY,
+                                  GRAPH_DIMMED_OPACITY_MIN,
+                                  GRAPH_DIMMED_OPACITY_MAX
+                                )
+                                setRoleGraphVisual((previous) => ({
+                                  ...previous,
+                                  dimmedOpacity: Math.round(nextOpacity * 100) / 100
+                                }))
+                              }}
+                            />
+                            <input
+                              aria-label="角色脑图弱化透明度数值"
+                              max={GRAPH_DIMMED_OPACITY_MAX}
+                              min={GRAPH_DIMMED_OPACITY_MIN}
+                              step={0.01}
+                              type="number"
+                              value={roleGraphVisual.dimmedOpacity}
+                              onChange={(event) => {
+                                const nextOpacity = clampNumber(
+                                  Number(event.target.value) || DEFAULT_GRAPH_DIMMED_OPACITY,
+                                  GRAPH_DIMMED_OPACITY_MIN,
+                                  GRAPH_DIMMED_OPACITY_MAX
+                                )
+                                setRoleGraphVisual((previous) => ({
+                                  ...previous,
+                                  dimmedOpacity: Math.round(nextOpacity * 100) / 100
+                                }))
+                              }}
+                            />
+                          </div>
+                        </label>
+                        <div className="graph-visual-actions">
+                          <button
+                            className="text-button"
+                            type="button"
+                            onClick={() =>
+                              setRoleGraphVisual({
+                                backgroundColor: DEFAULT_ROLE_GRAPH_BG_COLOR,
+                                fontSize: DEFAULT_GRAPH_FONT_SIZE,
+                                dimmedOpacity: DEFAULT_GRAPH_DIMMED_OPACITY
+                              })
+                            }
+                          >
+                            重置
+                          </button>
+                          <button
+                            className="text-button"
+                            type="button"
+                            onClick={() => setIsRoleGraphVisualDialogOpen(false)}
+                          >
+                            关闭
+                          </button>
+                        </div>
+                      </div>
+                    )}
                     {roleRelationMenu.open && roleRelationMenu.relationId !== null && (
                       <div
                         className="editor-context-menu role-relation-menu"
                         ref={roleRelationMenuRef}
                         style={{ left: roleRelationMenu.x, top: roleRelationMenu.y }}
+                        onMouseDown={(event) => event.stopPropagation()}
                       >
                         <button
                           className="editor-context-item"
-                          onClick={() => editRoleRelation(roleRelationMenu.relationId as number)}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            editRoleRelation(roleRelationMenu.relationId as number)
+                          }}
                           type="button"
                         >
                           重命名
                         </button>
                         <button
                           className="editor-context-item"
-                          onClick={() => removeRoleRelation(roleRelationMenu.relationId as number)}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            removeRoleRelation(roleRelationMenu.relationId as number)
+                          }}
                           type="button"
                         >
                           删除
                         </button>
                       </div>
                     )}
+                    {roleNodeMenu.open && roleNodeMenu.roleId !== null && (
+                      <div
+                        className="editor-context-menu role-node-menu"
+                        onMouseDown={(event) => event.stopPropagation()}
+                        ref={roleNodeMenuRef}
+                        style={{ left: roleNodeMenu.x, top: roleNodeMenu.y }}
+                      >
+                        <button
+                          className="editor-context-item"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            const targetRoleId = roleNodeMenu.roleId as number
+                            const nextIds = selectedRoleIds.has(targetRoleId)
+                              ? Array.from(selectedRoleIds)
+                              : [targetRoleId]
+                            deleteRoleMemories(nextIds)
+                            setRoleNodeMenu({ open: false, x: 0, y: 0, roleId: null })
+                          }}
+                          type="button"
+                        >
+                          {selectedRoleIds.size > 1 && selectedRoleIds.has(roleNodeMenu.roleId)
+                            ? `删除已选角色（${selectedRoleIds.size}）`
+                            : '删除角色'}
+                        </button>
+                      </div>
+                    )}
+                    {isRoleGraphBoardFullscreen ? (
+                      <>
+                        <div className="role-graph-help">
+                          滚轮缩放 · 中键或空格+拖动平移 · 拖拽框选多选 · Delete 删除角色 · 双击空白新增角色 · 双击节点/连线编辑 · 拖动连线中点可弯曲
+                        </div>
+                        <aside className="role-graph-ai-preview">
+                          <h4>AI 可见关系预览</h4>
+                          {roleRelationPreviewLines.length > 0 ? (
+                            <ul>
+                              {roleRelationPreviewLines.map((line, index) => (
+                                <li key={`${index}-${line.slice(0, 12)}`}>{line}</li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <p>暂无关系。建立连线后会在这里实时展示模型可见关系描述。</p>
+                          )}
+                        </aside>
+                      </>
+                    ) : null}
+                    {shouldRenderRoleDialogsInsideGraph && roleEditorDialog && (
+                      <div
+                        className="role-editor-modal-backdrop role-editor-modal-backdrop--inside-graph"
+                        onMouseDown={(event) => {
+                          if (event.target === event.currentTarget) closeRoleEditor()
+                        }}
+                      >
+                        <div className="role-editor-modal" onMouseDown={(event) => event.stopPropagation()}>
+                          <h3>编辑角色</h3>
+                          <label>
+                            <span>名称</span>
+                            <input
+                              autoFocus
+                              type="text"
+                              value={roleEditorDialog.roleName}
+                              onChange={(event) =>
+                                setRoleEditorDialog((previous) =>
+                                  previous
+                                    ? {
+                                        ...previous,
+                                        roleName: event.target.value
+                                      }
+                                    : previous
+                                )
+                              }
+                            />
+                          </label>
+                          <label>
+                            <span>备注</span>
+                            <textarea
+                              value={roleEditorDialog.roleNote}
+                              onChange={(event) =>
+                                setRoleEditorDialog((previous) =>
+                                  previous
+                                    ? {
+                                        ...previous,
+                                        roleNote: event.target.value
+                                      }
+                                    : previous
+                                )
+                              }
+                            />
+                          </label>
+                          <label>
+                            <span>{`立场 ${roleEditorDialog.roleStance}/10（${getRoleStanceLabel(roleEditorDialog.roleStance)}）`}</span>
+                            <input
+                              type="range"
+                              min={1}
+                              max={10}
+                              step={1}
+                              value={roleEditorDialog.roleStance}
+                              onChange={(event) =>
+                                setRoleEditorDialog((previous) =>
+                                  previous
+                                    ? {
+                                        ...previous,
+                                        roleStance: Number(event.target.value)
+                                      }
+                                    : previous
+                                )
+                              }
+                            />
+                          </label>
+                          <div className="role-editor-actions">
+                            <button className="text-button" type="button" onClick={closeRoleEditor}>
+                              取消
+                            </button>
+                            <button className="primary-button" type="button" onClick={commitRoleEditor}>
+                              保存
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    {shouldRenderRoleDialogsInsideGraph && roleRelationEditorDialog && (
+                      <div
+                        className="role-editor-modal-backdrop role-editor-modal-backdrop--inside-graph"
+                        onMouseDown={(event) => {
+                          if (event.target === event.currentTarget) closeRoleRelationEditor()
+                        }}
+                      >
+                        <div className="role-editor-modal" onMouseDown={(event) => event.stopPropagation()}>
+                          <h3>编辑角色关系</h3>
+                          <label>
+                            <span>{`亲密度 ${roleRelationEditorDialog.intimacy}（${getRoleIntimacyLabel(roleRelationEditorDialog.intimacy)}）`}</span>
+                            <input
+                              type="range"
+                              min={ROLE_RELATION_MIN_INTIMACY}
+                              max={ROLE_RELATION_MAX_INTIMACY}
+                              step={1}
+                              value={roleRelationEditorDialog.intimacy}
+                              onChange={(event) =>
+                                setRoleRelationEditorDialog((previous) =>
+                                  previous
+                                    ? {
+                                        ...previous,
+                                        intimacy: Number(event.target.value)
+                                      }
+                                    : previous
+                                )
+                              }
+                            />
+                          </label>
+                          <label>
+                            <span>关系标签（可自定义）</span>
+                            <input
+                              autoFocus
+                              type="text"
+                              value={roleRelationEditorDialog.tagsInput}
+                              onChange={(event) =>
+                                setRoleRelationEditorDialog((previous) =>
+                                  previous
+                                    ? {
+                                        ...previous,
+                                        tagsInput: event.target.value
+                                      }
+                                    : previous
+                                )
+                              }
+                              onKeyDown={handleRoleRelationTagsInputKeyDown}
+                              placeholder="多个标签用逗号分隔"
+                            />
+                            <div className="role-relation-tag-suggestions">
+                              {roleRelationTagOptions.map((tag) => (
+                                <button
+                                  key={tag}
+                                  className="text-button"
+                                  type="button"
+                                  onClick={() =>
+                                    setRoleRelationEditorDialog((previous) => {
+                                      if (!previous) return previous
+                                      const tags = splitRelationTags(previous.tagsInput)
+                                      if (tags.includes(tag)) return previous
+                                      return {
+                                        ...previous,
+                                        tagsInput: [...tags, tag].join('、')
+                                      }
+                                    })
+                                  }
+                                >
+                                  {tag}
+                                </button>
+                              ))}
+                            </div>
+                          </label>
+                          <div className="role-editor-actions">
+                            <button className="text-button" type="button" onClick={closeRoleRelationEditor}>
+                              取消
+                            </button>
+                            <button className="primary-button" type="button" onClick={commitRoleRelationEditor}>
+                              保存
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <ul className="memory-list">
                     {filteredMemory.map((item, index) => (
-                      <li key={item.id} onClick={() => jumpToMemory(item)}>
+                      <li
+                        key={item.id}
+                        onClick={(event) => {
+                          if (event.detail > 1) return
+                          if (memoryModule === 'role') {
+                            openRoleRelationsPanel(item.id, 'memory-card')
+                            return
+                          }
+                          jumpToMemory(item)
+                        }}
+                      >
                         <span>{index + 1}</span>
                         <div className="memory-content">
                           {memoryModule === 'role' ? (
-                            <div className="role-memory-card" onClick={(event) => event.stopPropagation()}>
+                            <div className="role-memory-card role-memory-card--jumpable">
                               <strong
                                 className="role-memory-card-name"
                                 onDoubleClick={() => openRoleEditor(item)}
@@ -6136,17 +9391,6 @@ ${message}`
                               >
                                 {getRoleName(item)}
                               </strong>
-                              <button
-                                className="memory-jump role-memory-first-appearance"
-                                onClick={(event) => {
-                                  event.preventDefault()
-                                  event.stopPropagation()
-                                  jumpToMemory(item)
-                                }}
-                              >
-                                {item.chapterTitle} / {item.versionTitle}
-                                <em>首次出现</em>
-                              </button>
                             </div>
                           ) : (
                             <>
@@ -6210,7 +9454,7 @@ ${message}`
                 >
                   {memoryModule === 'role' ? '新增角色' : '新增记忆'}
                 </button>
-                {roleEditorDialog && (
+                {!shouldRenderRoleDialogsInsideGraph && roleEditorDialog && (
                   <div
                     className="role-editor-modal-backdrop"
                     onMouseDown={(event) => {
@@ -6284,6 +9528,88 @@ ${message}`
                     </div>
                   </div>
                 )}
+                {!shouldRenderRoleDialogsInsideGraph && roleRelationEditorDialog && (
+                  <div
+                    className="role-editor-modal-backdrop"
+                    onMouseDown={(event) => {
+                      if (event.target === event.currentTarget) closeRoleRelationEditor()
+                    }}
+                  >
+                    <div className="role-editor-modal" onMouseDown={(event) => event.stopPropagation()}>
+                      <h3>编辑角色关系</h3>
+                      <label>
+                        <span>{`亲密度 ${roleRelationEditorDialog.intimacy}（${getRoleIntimacyLabel(roleRelationEditorDialog.intimacy)}）`}</span>
+                        <input
+                          type="range"
+                          min={ROLE_RELATION_MIN_INTIMACY}
+                          max={ROLE_RELATION_MAX_INTIMACY}
+                          step={1}
+                          value={roleRelationEditorDialog.intimacy}
+                          onChange={(event) =>
+                            setRoleRelationEditorDialog((previous) =>
+                              previous
+                                ? {
+                                    ...previous,
+                                    intimacy: Number(event.target.value)
+                                  }
+                                : previous
+                            )
+                          }
+                        />
+                      </label>
+                      <label>
+                        <span>关系标签（可自定义）</span>
+                        <input
+                          autoFocus
+                          type="text"
+                          value={roleRelationEditorDialog.tagsInput}
+                          onChange={(event) =>
+                            setRoleRelationEditorDialog((previous) =>
+                              previous
+                                ? {
+                                    ...previous,
+                                    tagsInput: event.target.value
+                                  }
+                                : previous
+                            )
+                          }
+                          onKeyDown={handleRoleRelationTagsInputKeyDown}
+                          placeholder="多个标签用逗号分隔"
+                        />
+                        <div className="role-relation-tag-suggestions">
+                          {roleRelationTagOptions.map((tag) => (
+                            <button
+                              key={tag}
+                              className="text-button"
+                              type="button"
+                              onClick={() =>
+                                setRoleRelationEditorDialog((previous) => {
+                                  if (!previous) return previous
+                                  const tags = splitRelationTags(previous.tagsInput)
+                                  if (tags.includes(tag)) return previous
+                                  return {
+                                    ...previous,
+                                    tagsInput: [...tags, tag].join('、')
+                                  }
+                                })
+                              }
+                            >
+                              {tag}
+                            </button>
+                          ))}
+                        </div>
+                      </label>
+                      <div className="role-editor-actions">
+                        <button className="text-button" type="button" onClick={closeRoleRelationEditor}>
+                          取消
+                        </button>
+                        <button className="primary-button" type="button" onClick={commitRoleRelationEditor}>
+                          保存
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </section>
             )}
 
@@ -6294,6 +9620,24 @@ ${message}`
                   <h2>共享参考库</h2>
                 </div>
                 <p className="backup-note-tip">仅用于写作参考，不会注入模型会话上下文。</p>
+                <div className="memory-view-row">
+                  <div className="memory-view-tabs">
+                    <button
+                      className={backupGraphView === 'list' ? 'active' : ''}
+                      type="button"
+                      onClick={() => setBackupGraphView('list')}
+                    >
+                      列表
+                    </button>
+                    <button
+                      className={backupGraphView === 'graph' ? 'active' : ''}
+                      type="button"
+                      onClick={() => setBackupGraphView('graph')}
+                    >
+                      脑图
+                    </button>
+                  </div>
+                </div>
                 <div className="memory-search-row">
                   <button
                     className="text-button"
@@ -6305,53 +9649,668 @@ ${message}`
                   >
                     搜索
                   </button>
-                  <input
-                    id="backup-search-input"
-                    className="memory-search-input"
-                    type="text"
-                    value={backupSearchQuery}
-                    onChange={(event) => setBackupSearchQuery(event.target.value)}
-                    placeholder="输入关键词实时搜索全部参考"
-                  />
+                  <div className="memory-search-input-wrap">
+                    <input
+                      id="backup-search-input"
+                      className="memory-search-input"
+                      type="text"
+                      value={backupSearchQuery}
+                      onChange={(event) => setBackupSearchQuery(event.target.value)}
+                      placeholder="输入关键词实时搜索全部参考"
+                    />
+                    {backupSearchQuery.trim() ? (
+                      <button
+                        aria-label="清空搜索"
+                        className="memory-search-clear"
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => {
+                          setBackupSearchQuery('')
+                          const input = document.getElementById('backup-search-input')
+                          if (input instanceof HTMLInputElement) input.focus()
+                        }}
+                        type="button"
+                      >
+                        x
+                      </button>
+                    ) : null}
+                  </div>
                 </div>
-                <ul className="backup-list">
-                  {filteredBackups.map((backup) => (
-                    <li key={backup.id}>
-                      <header>
-                        <input
-                          className="backup-title-input"
-                          value={backup.title}
-                          onChange={(event) =>
-                            updateBackup(backup.id, { title: event.target.value })
-                          }
-                        />
-                        <span>{`改 ${backup.updatedAt}`}</span>
-                      </header>
-                      <textarea
-                        value={backup.content}
-                        onChange={(event) =>
-                          updateBackup(backup.id, { content: event.target.value })
-                        }
-                      />
-                      <div className="backup-actions">
-                        <button
-                          className="backup-delete"
-                          onClick={() => deleteBackup(backup.id)}
+                {backupGraphView === 'graph' ? (
+                  <div
+                    className={`backup-graph-board${isBackupGraphSpacePressed ? ' is-space' : ''}${isBackupGraphPanning ? ' is-panning' : ''}`}
+                    ref={backupGraphBoardRef}
+                    style={backupGraphBoardStyle}
+                    onMouseDown={beginBackupGraphPan}
+                    onMouseMove={handleBackupGraphMouseMove}
+                    onMouseUp={handleBackupGraphMouseUp}
+                    onDoubleClick={handleBackupGraphDoubleClick}
+                    onWheel={handleBackupGraphWheel}
+                    onAuxClick={(event) => {
+                      if (event.button === 1) event.preventDefault()
+                    }}
+                    onMouseLeave={() => {
+                      setIsBackupGraphPanning(false)
+                      backupGraphPanStartRef.current = null
+                      setDraggingBackupId(null)
+                      setBackupLinkStart(null)
+                      setBackupLinkTarget(null)
+                      setBackupLinkPreview(null)
+                      setBackupNodeMenu({ open: false, x: 0, y: 0, backupId: null })
+                    }}
+                    onContextMenu={(event) => {
+                      const target = event.target
+                      if (
+                        target instanceof Element &&
+                        target.closest(
+                          '.backup-graph-node, .backup-graph-edge, .backup-relation-menu, .backup-node-menu'
+                        )
+                      ) {
+                        return
+                      }
+                      if (backupRelationMenu.open) {
+                        event.preventDefault()
+                        setBackupRelationMenu({ open: false, x: 0, y: 0, relationId: null })
+                      }
+                      if (backupNodeMenu.open) {
+                        event.preventDefault()
+                        setBackupNodeMenu({ open: false, x: 0, y: 0, backupId: null })
+                      }
+                    }}
+                  >
+                    {isBackupGraphBoardFullscreen && (
+                      <button
+                        className="text-button role-graph-exit-button"
+                        onClick={() => void toggleBackupGraphFullscreen()}
+                        type="button"
+                      >
+                        退出全屏
+                      </button>
+                    )}
+                    <div className="backup-graph-viewport" style={backupGraphViewportStyle}>
+                      <svg className="backup-graph-lines" width="100%" height="100%">
+                      <defs>
+                        <marker
+                          id="backup-graph-arrowhead"
+                          viewBox="0 0 10 10"
+                          refX="9"
+                          refY="5"
+                          markerWidth="7"
+                          markerHeight="7"
+                          orient="auto-start-reverse"
                         >
-                          删除
+                          <path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke" stroke="context-stroke" />
+                        </marker>
+                      </defs>
+                      {visibleBackupRelations.map((relation) => {
+                        const geometry = getBackupRelationGeometry(relation)
+                        if (!geometry) return null
+                        const relationMode = parseRoleRelationMode(relation.mode)
+                        const dashed = isRoleRelationDashed(relationMode)
+                        const bidirectional = isRoleRelationBidirectional(relationMode)
+                        const relationStrokeColor = normalizeRelationColor(
+                          relation.strokeColor,
+                          DEFAULT_BACKUP_RELATION_STROKE_COLOR
+                        )
+                        const relationLabelColor = normalizeRelationColor(
+                          relation.labelColor,
+                          DEFAULT_BACKUP_RELATION_LABEL_COLOR
+                        )
+                        const relationIsDirectFocus =
+                          selectedBackupId !== null &&
+                          (relation.fromBackupId === selectedBackupId ||
+                            relation.toBackupId === selectedBackupId)
+                        const relationHovered =
+                          hoveredBackupRelationId === relation.id ||
+                          draggingBackupRelationCurve?.relationId === relation.id
+                        return (
+                          <g
+                            key={relation.id}
+                            className={`backup-graph-edge${relationHovered ? ' is-hovered' : ''}${draggingBackupRelationCurve?.relationId === relation.id ? ' is-dragging' : ''}${shouldDimBackupGraph && !relationIsDirectFocus ? ' is-dimmed' : ''}`}
+                            onMouseEnter={() => setHoveredBackupRelationId(relation.id)}
+                            onMouseLeave={() =>
+                              setHoveredBackupRelationId((previous) =>
+                                previous === relation.id ? null : previous
+                              )
+                            }
+                          >
+                              <path
+                                className="backup-graph-edge-path"
+                                d={geometry.path}
+                                strokeDasharray={dashed ? '6 4' : undefined}
+                                markerEnd="url(#backup-graph-arrowhead)"
+                                markerStart={bidirectional ? 'url(#backup-graph-arrowhead)' : undefined}
+                                style={{ stroke: relationStrokeColor }}
+                                onDoubleClick={() => editBackupRelation(relation.id)}
+                                onContextMenu={(event) =>
+                                  openBackupRelationContextMenu(event, relation.id)
+                              }
+                            />
+                            <circle
+                              className="backup-graph-edge-handle"
+                              cx={geometry.curveMidPoint.x}
+                              cy={geometry.curveMidPoint.y}
+                              onMouseDown={(event) =>
+                                beginBackupRelationCurveDrag(event, relation.id)
+                              }
+                              r={9}
+                            />
+                            <text
+                              x={geometry.curveMidPoint.x}
+                              y={geometry.curveMidPoint.y - 12}
+                              style={{ fill: relationLabelColor }}
+                              onDoubleClick={() => editBackupRelation(relation.id)}
+                              onContextMenu={(event) =>
+                                openBackupRelationContextMenu(event, relation.id)
+                              }
+                            >
+                              {relation.causal || '因果'}
+                            </text>
+                          </g>
+                        )
+                      })}
+                        {backupLinkStart !== null && backupLinkPreview ? (
+                          (() => {
+                            const startPos = backupPositionById.get(backupLinkStart.backupId)
+                            if (!startPos) return null
+                            const startPoint = getBackupSidePoint(startPos, backupLinkStart.side)
+                            const previewDashed = isRoleRelationDashed(backupLinkStart.mode)
+                            const previewBidirectional = isRoleRelationBidirectional(backupLinkStart.mode)
+                            return (
+                              <line
+                                className="backup-graph-preview-line"
+                                x1={startPoint.x}
+                                y1={startPoint.y}
+                                x2={backupLinkPreview.x}
+                                y2={backupLinkPreview.y}
+                                strokeDasharray={previewDashed ? '6 4' : undefined}
+                                markerEnd="url(#backup-graph-arrowhead)"
+                                markerStart={previewBidirectional ? 'url(#backup-graph-arrowhead)' : undefined}
+                                style={{
+                                  stroke: normalizeRelationColor(
+                                    backupActiveRelationStrokeColor,
+                                    DEFAULT_BACKUP_RELATION_STROKE_COLOR
+                                  )
+                                }}
+                              />
+                            )
+                          })()
+                      ) : null}
+                      </svg>
+                      {filteredBackups.map((backup, index) => {
+                        const position =
+                          backupPositionById.get(backup.id) ?? getBackupNodePosition(backup, index)
+                        const showHandles =
+                          hoveredBackupId === backup.id || backupLinkStart?.backupId === backup.id
+                        const isDirectBackupNode =
+                          !shouldDimBackupGraph || directlyConnectedBackupIds.has(backup.id)
+                        const linkTargetForNode =
+                          backupLinkStart !== null && backupLinkTarget?.backupId === backup.id
+                            ? backupLinkTarget
+                            : null
+                        return (
+                          <article
+                            className={`backup-graph-node ${draggingBackupId === backup.id ? 'dragging' : ''}${showHandles ? ' show-handles' : ''}${!isDirectBackupNode ? ' is-dimmed' : ''}`}
+                            data-backup-id={backup.id}
+                            key={backup.id}
+                            onMouseDown={(event) => beginBackupDrag(event, backup.id)}
+                            onContextMenu={(event) => openBackupNodeContextMenu(event, backup.id)}
+                            onDoubleClick={(event) => {
+                              event.preventDefault()
+                              event.stopPropagation()
+                              openBackupEditor(backup.id)
+                            }}
+                            onMouseEnter={() => setHoveredBackupId(backup.id)}
+                            onMouseLeave={() =>
+                              setHoveredBackupId((previous) =>
+                                previous === backup.id ? null : previous
+                              )
+                            }
+                            style={{
+                              left: position.x,
+                              top: position.y
+                            }}
+                          >
+                            {ROLE_LINK_SIDES.map((side) => (
+                              <button
+                                className={`backup-link-handle side-${side}`}
+                                key={side}
+                                onMouseDown={(event) => beginBackupLink(event, backup.id, side)}
+                                title="拖动建立因果线"
+                                type="button"
+                              >
+                                ●
+                              </button>
+                            ))}
+                            {showHandles && (
+                              <div className="backup-link-mode-picker" onMouseDown={(event) => event.stopPropagation()}>
+                                {ROLE_RELATION_MODE_OPTIONS.map((option) => (
+                                  <button
+                                    className={`role-link-mode-option${backupActiveRelationMode === option.mode ? ' active' : ''}`}
+                                    key={option.mode}
+                                    onClick={(event) => {
+                                      event.preventDefault()
+                                      event.stopPropagation()
+                                      setBackupActiveRelationMode(option.mode)
+                                    }}
+                                    title={option.label}
+                                    type="button"
+                                  >
+                                    {option.icon}
+                                  </button>
+                                ))}
+                                <label className="relation-color-control" title="线条颜色">
+                                  <input
+                                    className="relation-color-input"
+                                    type="color"
+                                    aria-label="线条颜色"
+                                    value={backupActiveRelationStrokeColor}
+                                    onChange={(event) => {
+                                      event.stopPropagation()
+                                      setBackupActiveRelationStrokeColor(event.target.value)
+                                    }}
+                                  />
+                                </label>
+                                <label className="relation-color-control" title="字体颜色">
+                                  <input
+                                    className="relation-color-input"
+                                    type="color"
+                                    aria-label="字体颜色"
+                                    value={backupActiveRelationLabelColor}
+                                    onChange={(event) => {
+                                      event.stopPropagation()
+                                      setBackupActiveRelationLabelColor(event.target.value)
+                                    }}
+                                  />
+                                </label>
+                              </div>
+                            )}
+                            {linkTargetForNode && (
+                              <span
+                                className={`backup-link-target-indicator side-${linkTargetForNode.side}`}
+                              >
+                                ●
+                              </span>
+                            )}
+                            <h4>{backup.title || `事件${index + 1}`}</h4>
+                            <p>{backup.content.trim() || '事件内容'}</p>
+                            <small>{`改 ${backup.updatedAt}`}</small>
+                          </article>
+                        )
+                      })}
+                    </div>
+                    <button
+                      className="role-graph-corner-fullscreen"
+                      onClick={() => void toggleBackupGraphFullscreen()}
+                      title={isBackupGraphBoardFullscreen ? '退出全屏' : '全屏'}
+                      type="button"
+                    >
+                      {isBackupGraphBoardFullscreen ? '⤡' : '⛶'}
+                    </button>
+                    <button
+                      className="text-button role-graph-visual-button"
+                      onMouseDown={(event) => event.stopPropagation()}
+                      onClick={(event) => {
+                        event.preventDefault()
+                        event.stopPropagation()
+                        setIsBackupGraphVisualDialogOpen((previous) => !previous)
+                      }}
+                      title="脑图视觉设置"
+                      type="button"
+                    >
+                      ⚙
+                    </button>
+                    {isBackupGraphVisualDialogOpen && (
+                      <div
+                        className="graph-visual-panel"
+                        onMouseDown={(event) => event.stopPropagation()}
+                      >
+                        <h4>脑图设置</h4>
+                        <label>
+                          <span>背景色</span>
+                          <input
+                            aria-label="事件脑图背景色"
+                            type="color"
+                            value={backupGraphVisual.backgroundColor}
+                            onChange={(event) =>
+                              setBackupGraphVisual((previous) => ({
+                                ...previous,
+                                backgroundColor: normalizeRelationColor(
+                                  event.target.value,
+                                  DEFAULT_BACKUP_GRAPH_BG_COLOR
+                                )
+                              }))
+                            }
+                          />
+                        </label>
+                        <label>
+                          <span>{`字体大小 ${backupGraphVisual.fontSize}px`}</span>
+                          <div className="graph-visual-size-row">
+                            <input
+                              aria-label="事件脑图字体大小滑杆"
+                              max={GRAPH_FONT_SIZE_MAX}
+                              min={GRAPH_FONT_SIZE_MIN}
+                              type="range"
+                              value={backupGraphVisual.fontSize}
+                              onChange={(event) => {
+                                const nextSize = clampNumber(
+                                  Number(event.target.value) || DEFAULT_GRAPH_FONT_SIZE,
+                                  GRAPH_FONT_SIZE_MIN,
+                                  GRAPH_FONT_SIZE_MAX
+                                )
+                                setBackupGraphVisual((previous) => ({
+                                  ...previous,
+                                  fontSize: Math.round(nextSize)
+                                }))
+                              }}
+                            />
+                            <input
+                              aria-label="事件脑图字体大小数值"
+                              max={GRAPH_FONT_SIZE_MAX}
+                              min={GRAPH_FONT_SIZE_MIN}
+                              type="number"
+                              value={backupGraphVisual.fontSize}
+                              onChange={(event) => {
+                                const nextSize = clampNumber(
+                                  Number(event.target.value) || DEFAULT_GRAPH_FONT_SIZE,
+                                  GRAPH_FONT_SIZE_MIN,
+                                  GRAPH_FONT_SIZE_MAX
+                                )
+                                setBackupGraphVisual((previous) => ({
+                                  ...previous,
+                                  fontSize: Math.round(nextSize)
+                                }))
+                              }}
+                            />
+                          </div>
+                        </label>
+                        <label>
+                          <span>{`弱化透明度 ${backupGraphVisual.dimmedOpacity.toFixed(2)}`}</span>
+                          <div className="graph-visual-size-row">
+                            <input
+                              aria-label="事件脑图弱化透明度滑杆"
+                              max={GRAPH_DIMMED_OPACITY_MAX}
+                              min={GRAPH_DIMMED_OPACITY_MIN}
+                              step={0.01}
+                              type="range"
+                              value={backupGraphVisual.dimmedOpacity}
+                              onChange={(event) => {
+                                const nextOpacity = clampNumber(
+                                  Number(event.target.value) || DEFAULT_GRAPH_DIMMED_OPACITY,
+                                  GRAPH_DIMMED_OPACITY_MIN,
+                                  GRAPH_DIMMED_OPACITY_MAX
+                                )
+                                setBackupGraphVisual((previous) => ({
+                                  ...previous,
+                                  dimmedOpacity: Math.round(nextOpacity * 100) / 100
+                                }))
+                              }}
+                            />
+                            <input
+                              aria-label="事件脑图弱化透明度数值"
+                              max={GRAPH_DIMMED_OPACITY_MAX}
+                              min={GRAPH_DIMMED_OPACITY_MIN}
+                              step={0.01}
+                              type="number"
+                              value={backupGraphVisual.dimmedOpacity}
+                              onChange={(event) => {
+                                const nextOpacity = clampNumber(
+                                  Number(event.target.value) || DEFAULT_GRAPH_DIMMED_OPACITY,
+                                  GRAPH_DIMMED_OPACITY_MIN,
+                                  GRAPH_DIMMED_OPACITY_MAX
+                                )
+                                setBackupGraphVisual((previous) => ({
+                                  ...previous,
+                                  dimmedOpacity: Math.round(nextOpacity * 100) / 100
+                                }))
+                              }}
+                            />
+                          </div>
+                        </label>
+                        <div className="graph-visual-actions">
+                          <button
+                            className="text-button"
+                            type="button"
+                            onClick={() =>
+                              setBackupGraphVisual({
+                                backgroundColor: DEFAULT_BACKUP_GRAPH_BG_COLOR,
+                                fontSize: DEFAULT_GRAPH_FONT_SIZE,
+                                dimmedOpacity: DEFAULT_GRAPH_DIMMED_OPACITY
+                              })
+                            }
+                          >
+                            重置
+                          </button>
+                          <button
+                            className="text-button"
+                            type="button"
+                            onClick={() => setIsBackupGraphVisualDialogOpen(false)}
+                          >
+                            关闭
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    {backupRelationMenu.open && backupRelationMenu.relationId !== null && (
+                      <div
+                        className="editor-context-menu backup-relation-menu"
+                        ref={backupRelationMenuRef}
+                        style={{ left: backupRelationMenu.x, top: backupRelationMenu.y }}
+                        onMouseDown={(event) => event.stopPropagation()}
+                      >
+                        <button
+                          className="editor-context-item"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            editBackupRelation(backupRelationMenu.relationId as number)
+                          }}
+                          type="button"
+                        >
+                          编辑因果
+                        </button>
+                        <button
+                          className="editor-context-item"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            removeBackupRelation(backupRelationMenu.relationId as number)
+                          }}
+                          type="button"
+                        >
+                          删除连线
                         </button>
                       </div>
-                    </li>
-                  ))}
-                </ul>
-                {!filteredBackups.length && (
+                    )}
+                    {backupNodeMenu.open && backupNodeMenu.backupId !== null && (
+                      <div
+                        className="editor-context-menu backup-node-menu"
+                        ref={backupNodeMenuRef}
+                        style={{ left: backupNodeMenu.x, top: backupNodeMenu.y }}
+                        onMouseDown={(event) => event.stopPropagation()}
+                      >
+                        <button
+                          className="editor-context-item"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            openBackupEditor(backupNodeMenu.backupId as number)
+                          }}
+                          type="button"
+                        >
+                          编辑事件
+                        </button>
+                        <button
+                          className="editor-context-item"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            deleteBackup(backupNodeMenu.backupId as number)
+                            setBackupNodeMenu({ open: false, x: 0, y: 0, backupId: null })
+                          }}
+                          type="button"
+                        >
+                          删除事件
+                        </button>
+                      </div>
+                    )}
+                    {isBackupGraphBoardFullscreen ? (
+                      <div className="backup-graph-help">
+                        滚轮缩放 · 中键或空格+拖动平移 · 拖拽四边连接点建立因果 · 双击事件/连线编辑 · 拖拽连线中点可弯曲
+                      </div>
+                    ) : null}
+                    {backupRelationEditorDialog && (
+                      <div
+                        className="role-editor-modal-backdrop role-editor-modal-backdrop--inside-graph"
+                        onMouseDown={(event) => {
+                          if (event.target === event.currentTarget) closeBackupRelationEditor()
+                        }}
+                      >
+                        <div className="role-editor-modal" onMouseDown={(event) => event.stopPropagation()}>
+                          <h3>编辑事件因果</h3>
+                          <label>
+                            <span>因果描述</span>
+                            <input
+                              autoFocus
+                              type="text"
+                              value={backupRelationEditorDialog.causal}
+                              onChange={(event) =>
+                                setBackupRelationEditorDialog((previous) =>
+                                  previous
+                                    ? {
+                                        ...previous,
+                                        causal: event.target.value
+                                      }
+                                    : previous
+                                )
+                              }
+                              placeholder="例如：导火索、引发、反噬、连锁反应"
+                            />
+                          </label>
+                          <div className="role-editor-actions">
+                            <button
+                              className="text-button"
+                              type="button"
+                              onClick={closeBackupRelationEditor}
+                            >
+                              取消
+                            </button>
+                            <button
+                              className="primary-button"
+                              type="button"
+                              onClick={commitBackupRelationEditor}
+                            >
+                              保存
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    {backupEditorDialog && (
+                      <div
+                        className="role-editor-modal-backdrop role-editor-modal-backdrop--inside-graph"
+                        onMouseDown={(event) => {
+                          if (event.target === event.currentTarget) closeBackupEditor()
+                        }}
+                      >
+                        <div className="role-editor-modal" onMouseDown={(event) => event.stopPropagation()}>
+                          <h3>编辑事件卡</h3>
+                          <label>
+                            <span>标题</span>
+                            <input
+                              autoFocus
+                              type="text"
+                              value={backupEditorDialog.title}
+                              onChange={(event) =>
+                                setBackupEditorDialog((previous) =>
+                                  previous
+                                    ? {
+                                        ...previous,
+                                        title: event.target.value
+                                      }
+                                    : previous
+                                )
+                              }
+                              placeholder="输入事件标题"
+                            />
+                          </label>
+                          <label>
+                            <span>内容</span>
+                            <textarea
+                              value={backupEditorDialog.content}
+                              onChange={(event) =>
+                                setBackupEditorDialog((previous) =>
+                                  previous
+                                    ? {
+                                        ...previous,
+                                        content: event.target.value
+                                      }
+                                    : previous
+                                )
+                              }
+                              placeholder="输入事件内容"
+                            />
+                          </label>
+                          <div className="role-editor-actions">
+                            <button className="text-button" type="button" onClick={closeBackupEditor}>
+                              取消
+                            </button>
+                            <button className="primary-button" type="button" onClick={commitBackupEditor}>
+                              保存
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <>
+                    <ul className="backup-list">
+                      {filteredBackups.map((backup) => (
+                        <li key={backup.id}>
+                          <header>
+                            <input
+                              className="backup-title-input"
+                              value={backup.title}
+                              onChange={(event) =>
+                                updateBackup(backup.id, { title: event.target.value })
+                              }
+                            />
+                            <span>{`改 ${backup.updatedAt}`}</span>
+                          </header>
+                          <textarea
+                            value={backup.content}
+                            onChange={(event) =>
+                              updateBackup(backup.id, { content: event.target.value })
+                            }
+                          />
+                          <div className="backup-actions">
+                            <button
+                              className="backup-delete"
+                              onClick={() => deleteBackup(backup.id)}
+                            >
+                              删除
+                            </button>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                    {!filteredBackups.length && (
+                      <p className="empty-tip">
+                        {backupSearchQuery.trim() ? '没有匹配的参考。' : '暂无参考。'}
+                      </p>
+                    )}
+                  </>
+                )}
+                {backupGraphView === 'graph' && !filteredBackups.length && (
                   <p className="empty-tip">
-                    {backupSearchQuery.trim() ? '没有匹配的参考。' : '暂无参考。'}
+                    {backupSearchQuery.trim() ? '没有匹配的事件。' : '暂无事件卡。'}
                   </p>
                 )}
                 <button
                   className="text-button"
-                  onClick={() => createBackup('写作参考内容', '新参考')}
+                  onClick={() => {
+                    const index = backups.length
+                    createBackup('写作参考内容', '新参考', {
+                      backupX: 28 + (index % 2) * 276,
+                      backupY: 28 + Math.floor(index / 2) * 170
+                    })
+                  }}
                 >
                   新增参考
                 </button>
@@ -6875,6 +10834,208 @@ ${message}`
               </button>
             )
           })}
+        </div>
+      )}
+
+      {scriptRolePicker && (
+        <div
+          className="script-role-picker"
+          ref={scriptRolePickerRef}
+          style={{ left: scriptRolePicker.x, top: scriptRolePicker.y }}
+        >
+          <header>
+            <strong>
+              {scriptRolePickerCurrentName
+                ? `切换角色：${scriptRolePickerCurrentName}`
+                : '角色切换'}
+            </strong>
+            <div className="script-role-picker-actions">
+              {scriptRolePickerCurrentName && !isNarratorLabel(scriptRolePickerCurrentName) ? (
+                isScriptRolePickerCurrentTracked ? (
+                  <>
+                    {scriptRolePickerCurrentRoleMemory ? (
+                      <button
+                        className="text-button"
+                        onClick={() => openRoleRelationsPanel(scriptRolePickerCurrentRoleMemory.id, 'script-tag')}
+                        type="button"
+                      >
+                        查看关系
+                      </button>
+                    ) : null}
+                  </>
+                ) : (
+                  <button
+                    className="text-button"
+                    onClick={() => addScriptRoleToMemoryIfNeeded(scriptRolePickerCurrentName)}
+                    type="button"
+                  >
+                    加入角色库
+                  </button>
+                )
+              ) : null}
+              <button
+                className="text-button"
+                onClick={() => closeScriptRolePicker()}
+                type="button"
+              >
+                关闭
+              </button>
+            </div>
+          </header>
+          {scriptRolePickerCurrentRoleMemory ? (
+            <div className="script-role-picker-role-meta">
+              <span>{`立场 ${getRoleStance(scriptRolePickerCurrentRoleMemory)}/10 · ${getRoleStanceLabel(getRoleStance(scriptRolePickerCurrentRoleMemory))}`}</span>
+              <small>{getRoleNote(scriptRolePickerCurrentRoleMemory).trim() || '暂无备注'}</small>
+            </div>
+          ) : null}
+          <div className="script-role-picker-body">
+            <div className="script-role-picker-left">
+              <div className="script-role-picker-search">
+                <input
+                  autoFocus
+                  ref={scriptRolePickerInputRef}
+                  onChange={(event) =>
+                    setScriptRolePicker((previous) =>
+                      previous
+                        ? {
+                            ...previous,
+                            query: event.target.value
+                          }
+                        : previous
+                    )
+                  }
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault()
+                      const preferred = filteredScriptRolePickerOptions[0] ?? scriptRolePicker.query
+                      commitScriptRolePicker(preferred)
+                    } else if (event.key === 'Escape') {
+                      event.preventDefault()
+                      closeScriptRolePicker()
+                    }
+                  }}
+                  placeholder="搜索或输入角色名称"
+                  value={scriptRolePicker.query}
+                />
+                {scriptRolePicker.query.trim() ? (
+                  <button
+                    aria-label="清空搜索"
+                    className="script-role-picker-clear"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() =>
+                      setScriptRolePicker((previous) =>
+                        previous
+                          ? {
+                              ...previous,
+                              query: ''
+                            }
+                          : previous
+                      )
+                    }
+                    type="button"
+                  >
+                    x
+                  </button>
+                ) : null}
+              </div>
+              <ul>
+                {filteredScriptRolePickerOptions.length > 0 ? (
+                  filteredScriptRolePickerOptions.map((name) => {
+                    const normalized = normalizeScriptRoleName(name)
+                    const isNarrator = isNarratorLabel(normalized)
+                    const colorClass = isNarrator
+                      ? 'script-role-picker-tag--narrator'
+                      : `script-role-picker-tag--color-${getScriptRoleColorIndex(normalized)}`
+                    return (
+                      <li key={name}>
+                        <button
+                          className={scriptRolePicker.currentName === normalized ? 'active' : ''}
+                          onClick={() => commitScriptRolePicker(normalized)}
+                          type="button"
+                        >
+                          <span className={`script-role-picker-tag ${colorClass}`}>{normalized}</span>
+                        </button>
+                      </li>
+                    )
+                  })
+                ) : (
+                  <li className="script-role-picker-empty">没有匹配角色，按 Enter 使用当前输入</li>
+                )}
+              </ul>
+            </div>
+            <section className="script-role-picker-detail">
+              <h5>角色信息</h5>
+              {scriptRolePickerRoleDraft ? (
+                <>
+                  <label>
+                    <span>名称</span>
+                    <input
+                      onChange={(event) =>
+                        setScriptRolePickerRoleDraft((previous) =>
+                          previous
+                            ? {
+                                ...previous,
+                                roleName: event.target.value
+                              }
+                            : previous
+                        )
+                      }
+                      placeholder="角色名称"
+                      value={scriptRolePickerRoleDraft.roleName}
+                    />
+                  </label>
+                  <label>
+                    <span>备注</span>
+                    <textarea
+                      onChange={(event) =>
+                        setScriptRolePickerRoleDraft((previous) =>
+                          previous
+                            ? {
+                                ...previous,
+                                roleNote: event.target.value
+                              }
+                            : previous
+                        )
+                      }
+                      placeholder="角色备注"
+                      value={scriptRolePickerRoleDraft.roleNote}
+                    />
+                  </label>
+                  <label>
+                    <span>{`立场 ${scriptRolePickerRoleDraft.roleStance}/10（${getRoleStanceLabel(scriptRolePickerRoleDraft.roleStance)}）`}</span>
+                    <input
+                      max={10}
+                      min={1}
+                      onChange={(event) =>
+                        setScriptRolePickerRoleDraft((previous) =>
+                          previous
+                            ? {
+                                ...previous,
+                                roleStance: clampRoleStance(Number(event.target.value))
+                              }
+                            : previous
+                        )
+                      }
+                      type="range"
+                      value={scriptRolePickerRoleDraft.roleStance}
+                    />
+                  </label>
+                  <button
+                    className="primary-button"
+                    disabled={!isScriptRolePickerRoleDraftDirty}
+                    onClick={saveScriptRolePickerRoleDraft}
+                    type="button"
+                  >
+                    保存到角色库
+                  </button>
+                </>
+              ) : (
+                <p className="script-role-picker-detail-empty">
+                  当前标签还没加入角色库。点击上方“加入角色库”后可在这里编辑并同步。
+                </p>
+              )}
+            </section>
+          </div>
         </div>
       )}
     </main>

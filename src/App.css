@@ -301,6 +301,22 @@ button:disabled {
   box-shadow: var(--panel-shadow-soft);
 }
 
+.project-recent-body {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.project-recent-body.is-empty {
+  align-items: center;
+  justify-content: center;
+  padding: 10px 8px;
+}
+
+.project-recent-body.is-empty .project-recent-list {
+  display: none;
+}
+
 .project-import-button {
   width: 100%;
   min-height: 42px;
@@ -350,7 +366,7 @@ button:disabled {
 
 .project-recent-panel .project-recent-list {
   gap: 6px;
-  min-height: 0;
+  min-height: 100%;
   overflow: auto;
   padding-right: 2px;
 }
@@ -1249,6 +1265,24 @@ button:disabled {
   font-size: 12px;
 }
 
+.menu-project-name {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  max-width: min(52vw, calc(100vw - 620px));
+  min-width: 0;
+  color: #3e423e;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: center;
+  pointer-events: none;
+}
+
 .menu-bar nav {
   display: flex;
   align-items: center;
@@ -1767,6 +1801,367 @@ button:disabled {
   padding-top: 6px;
 }
 
+.code-editor .monaco-editor .view-line .script-line-prefix {
+  border-radius: 6px;
+  padding: 1px 6px;
+  border: 1px solid rgba(121, 176, 235, 0.44);
+  color: #d7ecff;
+  font-weight: 600;
+  background: rgba(67, 125, 182, 0.42);
+  cursor: pointer;
+}
+
+.code-editor .monaco-editor .view-line .script-line-prefix--narrator {
+  border-color: rgba(112, 177, 246, 0.55);
+  background: rgba(67, 131, 194, 0.5);
+  color: #e4f2ff;
+}
+
+.code-editor .monaco-editor .view-line .script-line-prefix--untracked {
+  border-color: rgba(145, 154, 170, 0.62);
+  background: rgba(106, 114, 129, 0.48);
+  color: #ecf0f6;
+}
+
+.code-editor .monaco-editor .view-line .script-line-prefix--untracked:hover {
+  background: rgba(118, 126, 142, 0.62);
+}
+
+.code-editor .monaco-editor .view-line .script-line-prefix-color-0 {
+  background: rgba(62, 121, 186, 0.5);
+}
+
+.code-editor .monaco-editor .view-line .script-line-prefix-color-1 {
+  background: rgba(57, 130, 172, 0.52);
+}
+
+.code-editor .monaco-editor .view-line .script-line-prefix-color-2 {
+  background: rgba(86, 114, 189, 0.5);
+}
+
+.code-editor .monaco-editor .view-line .script-line-prefix-color-3 {
+  background: rgba(52, 125, 167, 0.52);
+}
+
+.code-editor .monaco-editor .view-line .script-line-prefix-color-4 {
+  background: rgba(74, 109, 193, 0.5);
+}
+
+.code-editor .monaco-editor .view-line .script-line-prefix-color-5 {
+  background: rgba(68, 126, 182, 0.52);
+}
+
+.code-editor .monaco-editor .view-line .script-line-prefix-color-6 {
+  background: rgba(88, 116, 178, 0.5);
+}
+
+.code-editor .monaco-editor .view-line .script-line-prefix-color-7 {
+  background: rgba(61, 121, 174, 0.52);
+}
+
+.code-editor .monaco-editor .view-line .script-line-prefix-color-8 {
+  background: rgba(74, 131, 198, 0.5);
+}
+
+.code-editor .monaco-editor .view-line .script-line-prefix-color-9 {
+  background: rgba(63, 110, 178, 0.5);
+}
+
+.code-editor .monaco-editor .view-line .script-line-prefix-color-10 {
+  background: rgba(61, 129, 185, 0.52);
+}
+
+.code-editor .monaco-editor .view-line .script-line-prefix-color-11 {
+  background: rgba(77, 118, 177, 0.5);
+}
+
+.script-role-picker {
+  position: fixed;
+  width: 640px;
+  max-width: calc(100vw - 16px);
+  min-height: 260px;
+  max-height: min(420px, calc(100vh - 16px));
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  background: #2c3238;
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.44);
+  z-index: 91;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.script-role-picker header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.script-role-picker-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.script-role-picker header strong {
+  color: #ecf2f8;
+  font-size: 14px;
+}
+
+.script-role-picker header .text-button {
+  min-height: 26px;
+  border-color: rgba(255, 255, 255, 0.18);
+  color: #d8e4ee;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 4px 8px;
+}
+
+.script-role-picker-role-meta {
+  display: grid;
+  gap: 2px;
+  padding: 0 2px;
+}
+
+.script-role-picker-role-meta span {
+  font-size: 12px;
+  color: #c8d4de;
+}
+
+.script-role-picker-role-meta small {
+  font-size: 11px;
+  color: #98a9b8;
+}
+
+.script-role-picker-body {
+  min-height: 0;
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+}
+
+.script-role-picker-left {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 8px;
+}
+
+.script-role-picker-detail {
+  min-height: 0;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(15, 18, 23, 0.46);
+  padding: 8px;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  overflow: auto;
+}
+
+.script-role-picker-detail h5 {
+  margin: 0;
+  font-size: 12px;
+  color: #d6e1eb;
+}
+
+.script-role-picker-detail label {
+  display: grid;
+  gap: 6px;
+}
+
+.script-role-picker-detail label > span {
+  font-size: 12px;
+  color: #b8c8d7;
+}
+
+.script-role-picker-detail textarea {
+  min-height: 60px;
+  max-height: 120px;
+  resize: vertical;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  background: rgba(19, 22, 27, 0.7);
+  color: #f0f4f7;
+  padding: 6px 8px;
+  font: inherit;
+}
+
+.script-role-picker-detail-empty {
+  margin: 0;
+  font-size: 12px;
+  color: #9bb0c2;
+  line-height: 1.45;
+}
+
+.script-role-picker input[type='text'],
+.script-role-picker input[type='search'],
+.script-role-picker input[type='number'] {
+  min-height: 34px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  background: rgba(19, 22, 27, 0.7);
+  color: #f0f4f7;
+  padding: 6px 8px;
+}
+
+.script-role-picker-search {
+  position: relative;
+}
+
+.script-role-picker-search input {
+  width: 100%;
+  padding-right: 30px;
+}
+
+.script-role-picker-clear {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.14);
+  color: rgba(240, 244, 247, 0.8);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.script-role-picker-clear:hover {
+  background: rgba(255, 255, 255, 0.24);
+  color: #f0f4f7;
+}
+
+.script-role-picker input[type='text']:focus,
+.script-role-picker input[type='search']:focus,
+.script-role-picker input[type='number']:focus,
+.script-role-picker textarea:focus {
+  outline: none;
+  border-color: rgba(240, 139, 53, 0.72);
+}
+
+.script-role-picker ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+  display: grid;
+  gap: 5px;
+  min-height: 0;
+  flex: 1 1 auto;
+  padding-top: 2px;
+}
+
+.script-role-picker li button {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  min-height: 32px;
+  background: rgba(255, 255, 255, 0.03);
+  color: #dbe7f0;
+  padding: 4px 8px;
+  text-align: left;
+}
+
+.script-role-picker li button:hover {
+  border-color: rgba(240, 139, 53, 0.72);
+}
+
+.script-role-picker li button.active {
+  border-color: rgba(240, 139, 53, 0.84);
+  background: rgba(227, 59, 36, 0.14);
+}
+
+.script-role-picker-tag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(126, 185, 245, 0.48);
+  color: #e4f1ff;
+  background: rgba(66, 125, 182, 0.52);
+}
+
+.script-role-picker-tag--narrator {
+  background: rgba(67, 131, 194, 0.5);
+}
+
+.script-role-picker-tag--color-0 {
+  background: rgba(62, 121, 186, 0.5);
+}
+
+.script-role-picker-tag--color-1 {
+  background: rgba(57, 130, 172, 0.52);
+}
+
+.script-role-picker-tag--color-2 {
+  background: rgba(86, 114, 189, 0.5);
+}
+
+.script-role-picker-tag--color-3 {
+  background: rgba(52, 125, 167, 0.52);
+}
+
+.script-role-picker-tag--color-4 {
+  background: rgba(74, 109, 193, 0.5);
+}
+
+.script-role-picker-tag--color-5 {
+  background: rgba(68, 126, 182, 0.52);
+}
+
+.script-role-picker-tag--color-6 {
+  background: rgba(88, 116, 178, 0.5);
+}
+
+.script-role-picker-tag--color-7 {
+  background: rgba(61, 121, 174, 0.52);
+}
+
+.script-role-picker-tag--color-8 {
+  background: rgba(74, 131, 198, 0.5);
+}
+
+.script-role-picker-tag--color-9 {
+  background: rgba(63, 110, 178, 0.5);
+}
+
+.script-role-picker-tag--color-10 {
+  background: rgba(61, 129, 185, 0.52);
+}
+
+.script-role-picker-tag--color-11 {
+  background: rgba(77, 118, 177, 0.5);
+}
+
+.script-role-picker-empty {
+  color: #aebdcc;
+  font-size: 12px;
+  padding: 8px 2px;
+}
+
+@media (max-width: 820px) {
+  .script-role-picker {
+    width: min(520px, calc(100vw - 16px));
+  }
+
+  .script-role-picker-body {
+    grid-template-columns: 1fr;
+  }
+}
+
 .command-strip {
   display: flex;
   gap: 1px;
@@ -1953,14 +2348,34 @@ button:disabled {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 10px;
+  padding: 6px 10px;
   border-bottom: 1px solid rgba(23, 23, 23, 0.12);
   cursor: move;
 }
 
 .assistant-chat-header strong {
   color: #262b30;
-  font-size: 15px;
+  font-size: 14px;
+  line-height: 1.2;
+}
+
+.assistant-chat-close {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px solid rgba(23, 23, 23, 0.2);
+  background: #ffffff;
+  color: #555f69;
+  display: inline-grid;
+  place-items: center;
+  line-height: 1;
+  font-size: 16px;
+  padding: 0;
+}
+
+.assistant-chat-close:hover {
+  border-color: rgba(227, 59, 36, 0.45);
+  color: #e33b24;
 }
 
 .assistant-chat-messages {
@@ -2016,12 +2431,14 @@ button:disabled {
 .assistant-chat-input-row {
   padding: 10px;
   border-top: 1px solid rgba(23, 23, 23, 0.12);
-  display: grid;
+  display: flex;
+  align-items: stretch;
   gap: 8px;
 }
 
 .assistant-chat-input-row textarea {
-  width: 100%;
+  flex: 1 1 auto;
+  width: auto;
   min-height: 70px;
   border: 1px solid rgba(23, 23, 23, 0.18);
   border-radius: 8px;
@@ -2032,10 +2449,11 @@ button:disabled {
   line-height: 1.4;
 }
 
-.assistant-chat-input-row .primary-button {
-  justify-self: end;
-  min-height: 36px;
-  padding: 0 14px;
+.assistant-chat-send {
+  flex: 0 0 76px;
+  min-height: 70px;
+  padding: 0;
+  align-self: stretch;
 }
 
 kbd {
@@ -2243,6 +2661,39 @@ kbd {
   border-color: rgba(227, 59, 36, 0.52);
 }
 
+.memory-search-input-wrap {
+  position: relative;
+}
+
+.memory-search-input-wrap .memory-search-input {
+  padding-right: 34px;
+}
+
+.memory-search-clear {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 4px;
+  background: rgba(110, 118, 131, 0.16);
+  color: rgba(28, 35, 44, 0.72);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.memory-search-clear:hover {
+  background: rgba(110, 118, 131, 0.26);
+  color: rgba(28, 35, 44, 0.92);
+}
+
 .memory-list li {
   display: grid;
   grid-template-columns: 26px minmax(0, 1fr) 28px;
@@ -2362,6 +2813,21 @@ kbd {
   gap: 8px;
 }
 
+.role-memory-card--jumpable {
+  cursor: pointer;
+}
+
+.role-memory-card--jumpable .role-memory-card-name {
+  text-decoration: underline;
+  text-decoration-color: rgba(34, 90, 146, 0.24);
+  text-underline-offset: 3px;
+}
+
+.role-memory-card--jumpable:hover .role-memory-card-name {
+  color: #1f4f82;
+  text-decoration-color: rgba(34, 90, 146, 0.45);
+}
+
 .role-memory-card-name {
   display: block;
   font-size: 18px;
@@ -2382,13 +2848,13 @@ kbd {
   border: 1px solid rgba(23, 23, 23, 0.12);
   border-radius: 8px;
   background:
-    linear-gradient(90deg, rgba(23, 23, 23, 0.035) 1px, transparent 1px)
+    linear-gradient(90deg, rgba(23, 23, 23, 0.02) 1px, transparent 1px)
       var(--role-graph-grid-offset-x, 0) var(--role-graph-grid-offset-y, 0) /
       var(--role-graph-grid-size, 24px) var(--role-graph-grid-size, 24px),
-    linear-gradient(rgba(23, 23, 23, 0.035) 1px, transparent 1px)
+    linear-gradient(rgba(23, 23, 23, 0.02) 1px, transparent 1px)
       var(--role-graph-grid-offset-x, 0) var(--role-graph-grid-offset-y, 0) /
       var(--role-graph-grid-size, 24px) var(--role-graph-grid-size, 24px),
-    rgba(255, 255, 255, 0.62);
+    var(--role-graph-bg-color, rgba(255, 255, 255, 0.82));
   position: relative;
   overflow: hidden;
 }
@@ -2413,6 +2879,15 @@ kbd {
   transform-origin: 0 0;
   will-change: transform;
   overflow: visible;
+}
+
+.role-graph-selection-box {
+  position: absolute;
+  border: 1px dashed rgba(227, 59, 36, 0.9);
+  background: rgba(227, 59, 36, 0.12);
+  border-radius: 6px;
+  pointer-events: none;
+  z-index: 3;
 }
 
 .role-graph-corner-fullscreen {
@@ -2463,24 +2938,58 @@ kbd {
   overflow: visible;
 }
 
-.role-graph-edge line,
+.role-graph-edge path,
 .role-graph-preview-line {
   stroke: rgba(36, 96, 160, 0.88);
   stroke-width: 2;
+  fill: none;
   pointer-events: stroke;
 }
 
+.role-graph-edge-path {
+  cursor: pointer;
+}
+
+.role-graph-edge.is-hovered .role-graph-edge-path,
+.role-graph-edge.is-dragging .role-graph-edge-path {
+  stroke-width: 2.6;
+}
+
 .role-graph-preview-line {
-  stroke-dasharray: 6 4;
+  pointer-events: none;
 }
 
 .role-graph-edge text {
   fill: #35506d;
-  font-size: 11px;
+  font-size: calc(var(--role-graph-font-size, 12px) - 1px);
   text-anchor: middle;
   pointer-events: auto;
   cursor: pointer;
   user-select: none;
+}
+
+.role-graph-edge-handle {
+  fill: rgba(255, 255, 255, 0.96);
+  stroke: rgba(36, 96, 160, 0.78);
+  stroke-width: 1.5;
+  pointer-events: auto;
+  cursor: grab;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.role-graph-edge.is-hovered .role-graph-edge-handle,
+.role-graph-edge.is-dragging .role-graph-edge-handle {
+  opacity: 1;
+}
+
+.role-graph-edge.is-dimmed,
+.role-graph-node.is-dimmed {
+  opacity: var(--role-graph-dim-opacity, 0.3);
+}
+
+.role-graph-edge.is-dragging .role-graph-edge-handle {
+  cursor: grabbing;
 }
 
 .role-edge-delete {
@@ -2495,15 +3004,26 @@ kbd {
   position: absolute;
   width: 188px;
   min-height: 94px;
-  border: 1px solid rgba(36, 96, 160, 0.34);
+  border-style: solid;
+  border-width: 20px 4px 4px;
+  border-color: rgba(36, 96, 160, 0.34);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.9);
+  background: #ffffff;
   box-shadow: 0 6px 18px rgba(31, 37, 42, 0.11);
-  padding: 10px 12px;
+  padding: 8px 12px 10px;
   cursor: grab;
   display: grid;
   gap: 4px;
   z-index: 2;
+}
+
+.role-node-stance-emoji {
+  position: absolute;
+  top: 7px;
+  right: 10px;
+  font-size: 14px;
+  line-height: 1;
+  pointer-events: none;
 }
 
 .role-graph-node.dragging {
@@ -2511,16 +3031,21 @@ kbd {
   box-shadow: 0 10px 24px rgba(31, 37, 42, 0.18);
 }
 
+.role-graph-node.selected {
+  box-shadow: 0 0 0 2px rgba(227, 59, 36, 0.4), 0 10px 24px rgba(31, 37, 42, 0.18);
+}
+
 .role-graph-node h4 {
   margin: 0;
-  font-size: 15px;
+  padding-right: 22px;
+  font-size: calc(var(--role-graph-font-size, 12px) + 3px);
   line-height: 1.2;
   color: #20354a;
 }
 
 .role-graph-node p {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--role-graph-font-size, 12px);
   line-height: 1.35;
   color: #5c6470;
   min-height: 30px;
@@ -2528,7 +3053,7 @@ kbd {
 
 .role-graph-node small {
   color: #637185;
-  font-size: 11px;
+  font-size: calc(var(--role-graph-font-size, 12px) - 1px);
 }
 
 .role-link-handle {
@@ -2555,24 +3080,101 @@ kbd {
   pointer-events: auto;
 }
 
-.role-link-handle.corner-top-left {
-  left: -9px;
+.role-link-mode-picker,
+.backup-link-mode-picker {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  display: inline-flex;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid rgba(36, 96, 160, 0.3);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 4px 14px rgba(30, 38, 46, 0.12);
+  z-index: 7;
+  opacity: 0;
+  transform: translateY(4px);
+  pointer-events: none;
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+
+.role-graph-node.show-handles .role-link-mode-picker,
+.backup-graph-node.show-handles .backup-link-mode-picker {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.role-link-mode-option {
+  min-width: 24px;
+  height: 22px;
+  border: 1px solid rgba(36, 96, 160, 0.24);
+  border-radius: 6px;
+  background: #fff;
+  color: #2f5e8f;
+  padding: 0 4px;
+  font-size: 12px;
+  line-height: 1;
+  display: inline-grid;
+  place-items: center;
+}
+
+.role-link-mode-option:hover {
+  border-color: rgba(36, 96, 160, 0.55);
+}
+
+.role-link-mode-option.active {
+  border-color: rgba(227, 59, 36, 0.55);
+  background: rgba(227, 59, 36, 0.08);
+  color: #cf3b28;
+}
+
+.relation-color-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.relation-color-input {
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid rgba(36, 96, 160, 0.24);
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.relation-color-input::-webkit-color-swatch-wrapper {
+  padding: 2px;
+}
+
+.relation-color-input::-webkit-color-swatch {
+  border: none;
+  border-radius: 4px;
+}
+
+.role-link-handle.side-top {
   top: -9px;
+  left: calc(50% - 9px);
 }
 
-.role-link-handle.corner-top-right {
+.role-link-handle.side-right {
   right: -9px;
-  top: -9px;
+  top: calc(50% - 9px);
 }
 
-.role-link-handle.corner-bottom-right {
-  right: -9px;
+.role-link-handle.side-bottom {
   bottom: -9px;
+  left: calc(50% - 9px);
 }
 
-.role-link-handle.corner-bottom-left {
+.role-link-handle.side-left {
   left: -9px;
-  bottom: -9px;
+  top: calc(50% - 9px);
 }
 
 .role-link-target-indicator {
@@ -2614,7 +3216,13 @@ kbd {
 .role-relation-menu {
   width: 160px;
   max-width: calc(100vw - 16px);
-  z-index: 110;
+  z-index: 210;
+}
+
+.role-node-menu {
+  width: 220px;
+  max-width: calc(100vw - 16px);
+  z-index: 210;
 }
 
 .role-editor-modal-backdrop {
@@ -2623,7 +3231,13 @@ kbd {
   background: rgba(0, 0, 0, 0.42);
   display: grid;
   place-items: center;
-  z-index: 120;
+  z-index: 220;
+}
+
+.role-editor-modal-backdrop.role-editor-modal-backdrop--inside-graph {
+  position: absolute;
+  inset: 0;
+  z-index: 230;
 }
 
 .role-editor-modal {
@@ -2672,10 +3286,446 @@ kbd {
   accent-color: var(--accent);
 }
 
+.role-relation-tag-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.role-relation-tag-suggestions .text-button {
+  min-height: 26px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
 .role-editor-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.role-graph-help {
+  position: absolute;
+  left: 12px;
+  right: 320px;
+  bottom: 12px;
+  min-height: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  background: rgba(24, 31, 40, 0.56);
+  color: rgba(230, 239, 248, 0.92);
+  padding: 5px 9px;
+  font-size: 12px;
+  line-height: 1.35;
+  display: inline-flex;
+  align-items: center;
+  z-index: 12;
+  pointer-events: none;
+}
+
+.role-graph-visual-button {
+  position: absolute;
+  right: 56px;
+  bottom: 12px;
+  width: 34px;
+  height: 34px;
+  min-height: 34px;
+  border-radius: 8px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+  z-index: 9;
+}
+
+.graph-visual-panel {
+  position: absolute;
+  right: 12px;
+  bottom: 52px;
+  width: 220px;
+  max-width: calc(100% - 24px);
+  border: 1px solid rgba(23, 23, 23, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 10px 28px rgba(31, 37, 42, 0.18);
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+  z-index: 14;
+}
+
+.graph-visual-panel h4 {
+  margin: 0;
+  font-size: 13px;
+  color: #27384b;
+}
+
+.graph-visual-panel label {
+  display: grid;
+  gap: 6px;
+}
+
+.graph-visual-panel label > span {
+  font-size: 12px;
+  color: #5b6674;
+}
+
+.graph-visual-panel input[type='color'] {
+  width: 100%;
+  height: 32px;
+  border: 1px solid rgba(23, 23, 23, 0.16);
+  border-radius: 6px;
+  background: #fff;
+  padding: 2px 4px;
+}
+
+.graph-visual-size-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 56px;
+  align-items: center;
+  gap: 8px;
+}
+
+.graph-visual-size-row input[type='number'] {
+  width: 100%;
+  height: 30px;
+  border: 1px solid rgba(23, 23, 23, 0.16);
+  border-radius: 6px;
+  padding: 0 6px;
+  font-size: 12px;
+  color: #223246;
+  background: #fff;
+}
+
+.graph-visual-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.graph-visual-actions .text-button {
+  min-height: 28px;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.role-graph-board:fullscreen .role-graph-help {
+  left: 56px;
+}
+
+.role-graph-board:not(:fullscreen) .role-graph-help,
+.role-graph-board:not(:fullscreen) .role-graph-ai-preview {
+  display: none;
+}
+
+.role-graph-ai-preview {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 290px;
+  max-width: calc(100% - 24px);
+  max-height: calc(100% - 56px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  background: rgba(24, 31, 40, 0.72);
+  color: rgba(233, 239, 245, 0.95);
+  padding: 8px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 6px;
+  overflow: hidden;
+  z-index: 11;
+}
+
+.role-graph-ai-preview h4 {
+  margin: 0;
+  font-size: 13px;
+  color: #f3f7fb;
+}
+
+.role-graph-ai-preview ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow: auto;
+  display: grid;
+  gap: 6px;
+}
+
+.role-graph-ai-preview li {
+  font-size: 12px;
+  line-height: 1.45;
+  color: rgba(219, 230, 239, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 6px 7px;
+}
+
+.role-graph-ai-preview p {
+  margin: 0;
+  font-size: 12px;
+  color: rgba(208, 220, 232, 0.82);
+}
+
+.backup-graph-board {
+  margin: 16px 0 12px;
+  min-height: 340px;
+  height: 340px;
+  border: 1px solid rgba(23, 23, 23, 0.12);
+  border-radius: 8px;
+  background:
+    linear-gradient(90deg, rgba(23, 23, 23, 0.02) 1px, transparent 1px)
+      var(--backup-graph-grid-offset-x, 0) var(--backup-graph-grid-offset-y, 0) /
+      var(--backup-graph-grid-size, 24px) var(--backup-graph-grid-size, 24px),
+    linear-gradient(rgba(23, 23, 23, 0.02) 1px, transparent 1px)
+      var(--backup-graph-grid-offset-x, 0) var(--backup-graph-grid-offset-y, 0) /
+      var(--backup-graph-grid-size, 24px) var(--backup-graph-grid-size, 24px),
+    var(--backup-graph-bg-color, rgba(255, 255, 255, 0.82));
+  position: relative;
+  overflow: hidden;
+}
+
+.backup-graph-board.is-space {
+  cursor: grab;
+  user-select: none;
+}
+
+.backup-graph-board.is-panning {
+  cursor: grabbing;
+  user-select: none;
+}
+
+.backup-graph-board.is-space .backup-graph-node {
+  cursor: inherit;
+}
+
+.backup-graph-viewport {
+  position: absolute;
+  inset: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+  overflow: visible;
+}
+
+.backup-graph-board:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  min-height: 100vh;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+}
+
+.backup-graph-lines {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.backup-graph-edge path,
+.backup-graph-preview-line {
+  stroke: rgba(36, 96, 160, 0.88);
+  stroke-width: 2;
+  fill: none;
+  pointer-events: stroke;
+}
+
+.backup-graph-edge-path {
+  cursor: pointer;
+}
+
+.backup-graph-edge.is-hovered .backup-graph-edge-path,
+.backup-graph-edge.is-dragging .backup-graph-edge-path {
+  stroke-width: 2.6;
+}
+
+.backup-graph-preview-line {
+  pointer-events: none;
+}
+
+.backup-graph-edge text {
+  fill: #35506d;
+  font-size: calc(var(--backup-graph-font-size, 12px) - 1px);
+  text-anchor: middle;
+  pointer-events: auto;
+  cursor: pointer;
+  user-select: none;
+}
+
+.backup-graph-edge-handle {
+  fill: rgba(255, 255, 255, 0.96);
+  stroke: rgba(36, 96, 160, 0.78);
+  stroke-width: 1.5;
+  pointer-events: auto;
+  cursor: grab;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.backup-graph-edge.is-hovered .backup-graph-edge-handle,
+.backup-graph-edge.is-dragging .backup-graph-edge-handle {
+  opacity: 1;
+}
+
+.backup-graph-edge.is-dimmed,
+.backup-graph-node.is-dimmed {
+  opacity: var(--backup-graph-dim-opacity, 0.3);
+}
+
+.backup-graph-edge.is-dragging .backup-graph-edge-handle {
+  cursor: grabbing;
+}
+
+.backup-graph-node {
+  position: absolute;
+  width: 228px;
+  min-height: 124px;
+  border: 1px solid rgba(36, 96, 160, 0.3);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 6px 18px rgba(31, 37, 42, 0.11);
+  padding: 10px 12px;
+  cursor: grab;
+  display: grid;
+  gap: 6px;
+  z-index: 2;
+}
+
+.backup-graph-node.dragging {
+  cursor: grabbing;
+  box-shadow: 0 10px 24px rgba(31, 37, 42, 0.18);
+}
+
+.backup-graph-node h4 {
+  margin: 0;
+  font-size: calc(var(--backup-graph-font-size, 12px) + 3px);
+  line-height: 1.2;
+  color: #20354a;
+}
+
+.backup-graph-node p {
+  margin: 0;
+  font-size: var(--backup-graph-font-size, 12px);
+  line-height: 1.4;
+  color: #5c6470;
+  min-height: 48px;
+  max-height: 48px;
+  overflow: hidden;
+}
+
+.backup-graph-node small {
+  color: #637185;
+  font-size: calc(var(--backup-graph-font-size, 12px) - 1px);
+}
+
+.backup-link-handle {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  border: 1px solid rgba(36, 96, 160, 0.75);
+  border-radius: 50%;
+  background: #fff;
+  color: #2f6daa;
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  line-height: 1;
+  padding: 0;
+  cursor: crosshair;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.backup-graph-node.show-handles .backup-link-handle {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.backup-link-handle.side-top {
+  top: -9px;
+  left: calc(50% - 9px);
+}
+
+.backup-link-handle.side-right {
+  right: -9px;
+  top: calc(50% - 9px);
+}
+
+.backup-link-handle.side-bottom {
+  bottom: -9px;
+  left: calc(50% - 9px);
+}
+
+.backup-link-handle.side-left {
+  left: -9px;
+  top: calc(50% - 9px);
+}
+
+.backup-link-target-indicator {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  border: 1px solid rgba(36, 96, 160, 0.8);
+  border-radius: 50%;
+  background: #fff;
+  color: #2e6aa4;
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  line-height: 1;
+  padding: 0;
+  pointer-events: none;
+}
+
+.backup-link-target-indicator.side-top {
+  top: -9px;
+  left: calc(50% - 9px);
+}
+
+.backup-link-target-indicator.side-right {
+  right: -9px;
+  top: calc(50% - 9px);
+}
+
+.backup-link-target-indicator.side-bottom {
+  bottom: -9px;
+  left: calc(50% - 9px);
+}
+
+.backup-link-target-indicator.side-left {
+  left: -9px;
+  top: calc(50% - 9px);
+}
+
+.backup-relation-menu {
+  width: 160px;
+  max-width: calc(100vw - 16px);
+  z-index: 210;
+}
+
+.backup-graph-help {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  min-height: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  background: rgba(24, 31, 40, 0.56);
+  color: rgba(230, 239, 248, 0.92);
+  padding: 5px 9px;
+  font-size: 12px;
+  line-height: 1.35;
+  display: inline-flex;
+  align-items: center;
+  z-index: 12;
+  pointer-events: none;
+}
+
+.backup-graph-board:fullscreen .backup-graph-help {
+  left: 56px;
 }
 
 .text-button,
@@ -3130,6 +4180,14 @@ kbd {
 .empty-tip {
   margin: 24px 0 0;
   color: var(--muted);
+}
+
+.project-recent-empty-tip {
+  margin: 0;
+  color: #8e968f;
+  font-size: 18px;
+  line-height: 1.5;
+  text-align: center;
 }
 
 @media (max-width: 1100px) {
