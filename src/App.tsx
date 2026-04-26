@@ -70,6 +70,13 @@ type EditorContextMenuItem =
       disabled: boolean
     }
 
+type EditorSelectionRange = {
+  startLineNumber: number
+  startColumn: number
+  endLineNumber: number
+  endColumn: number
+}
+
 type SkillSource = 'official' | 'custom'
 type SkillCatalogItem = {
   id: string
@@ -89,6 +96,33 @@ type SkillsCenterPayload = {
   catalog: SkillCatalogItem[]
   skillsPrompt: string
   officialDir?: string
+}
+
+type ModelRequestLogItem = {
+  id: string
+  createdAt: string
+  provider: string
+  model: string
+  baseUrl: string
+  instructionChars: number
+  inputChars: number
+  memoryCount: number
+  skillsLoaded: boolean
+  skillsInjected: boolean
+  injectedThisRequest: boolean
+}
+
+type ModelRuntimeDiagnostics = {
+  generatedAt: string
+  skillsLoaded: boolean
+  skillsInjected: boolean
+  skillsHit: boolean
+  injectedThisRequest: boolean
+  skillsPromptHash: string
+  systemPromptHash: string
+  systemPromptPreview: string
+  latestRequest?: ModelRequestLogItem
+  requestLogs?: ModelRequestLogItem[]
 }
 
 type ChapterDropPosition = 'before' | 'after'
@@ -172,6 +206,7 @@ type Version = {
   updatedAt: string
   history: VersionHistoryItem[]
   historyLastSavedAtMs: number
+  assistantMessages: AssistantChatMessage[]
 }
 type Chapter = {
   id: number
@@ -267,13 +302,28 @@ type ProjectMeta = {
   updatedAt: string
 }
 
+type ActivationStatus = {
+  activated: boolean
+  rawActivated?: boolean
+  email: string
+  activatedAt: string
+  currentMachineMac?: string
+  boundMachineMac?: string
+  machineBound?: boolean
+  mode: string
+  projectLimit: number
+  localModelAllowed: boolean
+}
+
 const STORAGE_KEY = 'novelwriter.workspace.v3'
 const LEGACY_KEYS = ['novelwriter.workspace.v2', 'novelwriter.workspace.v1']
 const PROJECT_INDEX_KEY = 'novelwriter.projects.v1'
 const PROJECT_DATA_PREFIX = 'novelwriter.project.v1.'
 const LAST_PROJECT_KEY = 'novelwriter.project.last.v1'
 const LAST_SCREEN_KEY = 'novelwriter.screen.last.v1'
+const MODEL_CONNECTION_SIGNATURE_KEY = 'novelwriter.model.connection.signature.v1'
 const APP_DISPLAY_NAME = '超级兔子AI写作'
+const APP_VERSION_FALLBACK = 'v 1.1 bate'
 
 const actions: WriterAction[] = [
   {
@@ -438,6 +488,49 @@ function normalizeBaseUrl(baseUrl: string, provider: ProviderKind) {
   const clean = baseUrl.trim().replace(/\/+$/, '')
   if (!clean) return provider === 'ollama' ? 'http://localhost:11434' : ''
   return clean
+}
+
+function buildModelConnectionSignature(config: ProviderConfig) {
+  const normalizedBaseUrl = normalizeBaseUrl(config.baseUrl, config.kind)
+  return [
+    config.kind,
+    normalizedBaseUrl,
+    config.model.trim(),
+    config.apiKey.trim()
+  ].join('|')
+}
+
+function loadPersistedModelConnectionSignature() {
+  try {
+    return localStorage.getItem(MODEL_CONNECTION_SIGNATURE_KEY) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+function persistModelConnectionSignature(signature: string) {
+  try {
+    if (signature.trim()) {
+      localStorage.setItem(MODEL_CONNECTION_SIGNATURE_KEY, signature.trim())
+    }
+  } catch {
+    // ignore storage write errors
+  }
+}
+
+function clearPersistedModelConnectionSignature(expectedSignature?: string) {
+  try {
+    if (!expectedSignature) {
+      localStorage.removeItem(MODEL_CONNECTION_SIGNATURE_KEY)
+      return
+    }
+    const current = localStorage.getItem(MODEL_CONNECTION_SIGNATURE_KEY) ?? ''
+    if (current === expectedSignature) {
+      localStorage.removeItem(MODEL_CONNECTION_SIGNATURE_KEY)
+    }
+  } catch {
+    // ignore storage write errors
+  }
 }
 
 function buildOpenAiUrl(baseUrl: string) {
@@ -851,9 +944,16 @@ function countSnapshotChars(snapshot: NormalizedWorkspace) {
 }
 
 function parseAssistantModelOutput(raw: string) {
+  type AssistantApplyScope = 'none' | 'selection' | 'full'
   const text = raw.trim()
   if (!text) {
-    return { reply: '已处理。', apply: false, updatedDraft: '' }
+    return {
+      reply: '已处理。',
+      apply: false,
+      scope: 'none' as AssistantApplyScope,
+      updatedDraft: '',
+      updatedSelection: ''
+    }
   }
 
   const parseFromString = (value: string) => {
@@ -861,14 +961,25 @@ function parseAssistantModelOutput(raw: string) {
       const parsed = JSON.parse(value) as {
         reply?: unknown
         apply?: unknown
+        scope?: unknown
         updatedDraft?: unknown
+        updatedSelection?: unknown
+      }
+      let scope: AssistantApplyScope = 'none'
+      if (parsed.scope === 'selection' || parsed.scope === 'full' || parsed.scope === 'none') {
+        scope = parsed.scope
       }
       return {
         reply: typeof parsed.reply === 'string' && parsed.reply.trim() ? parsed.reply.trim() : '',
         apply: Boolean(parsed.apply),
+        scope,
         updatedDraft:
           typeof parsed.updatedDraft === 'string' && parsed.updatedDraft.trim()
             ? parsed.updatedDraft.trim()
+            : '',
+        updatedSelection:
+          typeof parsed.updatedSelection === 'string' && parsed.updatedSelection.trim()
+            ? parsed.updatedSelection.trim()
             : ''
       }
     } catch {
@@ -876,13 +987,43 @@ function parseAssistantModelOutput(raw: string) {
     }
   }
 
+  const normalizeParsedResult = (parsed: {
+    reply: string
+    apply: boolean
+    scope: AssistantApplyScope
+    updatedDraft: string
+    updatedSelection: string
+  }) => {
+    const hasSelectionUpdate = Boolean(parsed.updatedSelection)
+    const hasDraftUpdate = Boolean(parsed.updatedDraft)
+    const normalizedScope =
+      parsed.scope === 'selection'
+        ? hasSelectionUpdate
+          ? 'selection'
+          : 'none'
+        : parsed.scope === 'full'
+          ? hasDraftUpdate
+            ? 'full'
+            : 'none'
+          : hasSelectionUpdate
+            ? 'selection'
+            : hasDraftUpdate
+              ? 'full'
+              : 'none'
+    const normalizedApply =
+      (parsed.apply || hasSelectionUpdate || hasDraftUpdate) && normalizedScope !== 'none'
+    return {
+      reply: parsed.reply || (normalizedApply ? '已按你的要求更新正文。' : '已收到。'),
+      apply: normalizedApply,
+      scope: normalizedScope,
+      updatedDraft: parsed.updatedDraft,
+      updatedSelection: parsed.updatedSelection
+    }
+  }
+
   const direct = parseFromString(text)
   if (direct) {
-    return {
-      reply: direct.reply || (direct.apply ? '已按你的要求更新正文。' : '已收到。'),
-      apply: direct.apply && Boolean(direct.updatedDraft),
-      updatedDraft: direct.updatedDraft
-    }
+    return normalizeParsedResult(direct)
   }
 
   const first = text.indexOf('{')
@@ -890,15 +1031,44 @@ function parseAssistantModelOutput(raw: string) {
   if (first >= 0 && last > first) {
     const sliced = parseFromString(text.slice(first, last + 1))
     if (sliced) {
-      return {
-        reply: sliced.reply || (sliced.apply ? '已按你的要求更新正文。' : '已收到。'),
-        apply: sliced.apply && Boolean(sliced.updatedDraft),
-        updatedDraft: sliced.updatedDraft
-      }
+      return normalizeParsedResult(sliced)
     }
   }
 
-  return { reply: text, apply: false, updatedDraft: '' }
+  return { reply: text, apply: false, scope: 'none' as const, updatedDraft: '', updatedSelection: '' }
+}
+
+function isAssistantEditRequest(message: string) {
+  const normalized = message.replace(/\s+/g, '').toLowerCase()
+  if (!normalized) return false
+  const keywords = [
+    '改',
+    '修改',
+    '替换',
+    '润色',
+    '扩写',
+    '重写',
+    '精简',
+    '优化',
+    '改成',
+    '改为',
+    '续写',
+    '补充'
+  ]
+  return keywords.some((keyword) => normalized.includes(keyword))
+}
+
+function resolveAssistantFallbackScope(message: string, hasSelection: boolean): 'selection' | 'full' {
+  const normalized = message.replace(/\s+/g, '')
+  const fullPattern = /(整章|整篇|全文|全篇|整段|通篇|整体|当前版本|本章全部)/i
+  if (fullPattern.test(normalized) || !hasSelection) {
+    return 'full'
+  }
+  const selectionPattern = /(选中|这段|这一段|这句话|这句|局部|片段|选取)/i
+  if (selectionPattern.test(normalized)) {
+    return 'selection'
+  }
+  return 'selection'
 }
 
 function normalizeHistoryItems(items: unknown): VersionHistoryItem[] {
@@ -930,6 +1100,29 @@ function normalizeHistoryItems(items: unknown): VersionHistoryItem[] {
     .slice(-VERSION_HISTORY_LIMIT)
 }
 
+function normalizeAssistantMessages(items: unknown): AssistantChatMessage[] {
+  if (!Array.isArray(items) || items.length === 0) return []
+  return items
+    .map((item, index) => {
+      if (!item || typeof item !== 'object') return null
+      const raw = item as Partial<AssistantChatMessage>
+      const role: AssistantChatRole = raw.role === 'assistant' ? 'assistant' : 'user'
+      const content = typeof raw.content === 'string' ? raw.content : ''
+      if (!content.trim()) return null
+      const id =
+        typeof raw.id === 'number' && Number.isFinite(raw.id) ? raw.id : Date.now() + index
+      const createdAt =
+        typeof raw.createdAt === 'string' && raw.createdAt.trim() ? raw.createdAt : nowLabel()
+      return {
+        id,
+        role,
+        content,
+        createdAt
+      }
+    })
+    .filter((item): item is AssistantChatMessage => item !== null)
+}
+
 function buildVersion(
   id: number,
   index: number,
@@ -937,7 +1130,8 @@ function buildVersion(
   writingMode: WritingMode = 'novel',
   updatedAt = nowLabel(),
   history: VersionHistoryItem[] = [],
-  historyLastSavedAtMs?: number
+  historyLastSavedAtMs?: number,
+  assistantMessages: AssistantChatMessage[] = []
 ): Version {
   const normalizedHistory = normalizeHistoryItems(history)
   const fallbackSavedAt =
@@ -954,7 +1148,8 @@ function buildVersion(
     historyLastSavedAtMs:
       typeof historyLastSavedAtMs === 'number' && Number.isFinite(historyLastSavedAtMs)
         ? historyLastSavedAtMs
-        : fallbackSavedAt
+        : fallbackSavedAt,
+    assistantMessages: normalizeAssistantMessages(assistantMessages)
   }
 }
 
@@ -993,6 +1188,22 @@ function areSameNumberList(a: number[], b: number[]) {
   if (a.length !== b.length) return false
   for (let i = 0; i < a.length; i += 1) {
     if (a[i] !== b[i]) return false
+  }
+  return true
+}
+
+function areSameAssistantMessages(a: AssistantChatMessage[], b: AssistantChatMessage[]) {
+  if (a === b) return true
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i += 1) {
+    if (
+      a[i].id !== b[i].id ||
+      a[i].role !== b[i].role ||
+      a[i].content !== b[i].content ||
+      a[i].createdAt !== b[i].createdAt
+    ) {
+      return false
+    }
   }
   return true
 }
@@ -1063,6 +1274,7 @@ function normalizeChapter(
         normalizedHistory.length > 0
           ? normalizedHistory[normalizedHistory.length - 1].createdAtMs
           : Date.now()
+      const normalizedAssistantMessages = normalizeAssistantMessages(version.assistantMessages)
       return {
         id: typeof version.id === 'number' ? version.id : versionIndex + 1,
         title:
@@ -1080,7 +1292,8 @@ function normalizeChapter(
           typeof version.historyLastSavedAtMs === 'number' &&
           Number.isFinite(version.historyLastSavedAtMs)
             ? version.historyLastSavedAtMs
-            : fallbackSavedAt
+            : fallbackSavedAt,
+        assistantMessages: normalizedAssistantMessages
       }
     })
     const activeVersionId =
@@ -1668,6 +1881,7 @@ function App() {
   const assistantDialogRef = useRef<HTMLDivElement | null>(null)
   const assistantMessagesViewportRef = useRef<HTMLDivElement | null>(null)
   const autoConnectAttemptKeyRef = useRef('')
+  const persistedConnectionSignatureRef = useRef(loadPersistedModelConnectionSignature())
   const legacyWorkspace = useMemo(() => loadLegacyWorkspace(), [])
   const initialWorkspace = useMemo(() => createDefaultWorkspace(), [])
 
@@ -1684,7 +1898,23 @@ function App() {
   const [projectStorageDir, setProjectStorageDir] = useState('')
   const [autoUpdateEnabled, setAutoUpdateEnabled] = useState(true)
   const [autoLaunchEnabled, setAutoLaunchEnabled] = useState(true)
-  const [appVersionLabel, setAppVersionLabel] = useState('v 1.1 bate')
+  const [appVersionLabel, setAppVersionLabel] = useState(APP_VERSION_FALLBACK)
+  const [activationStatus, setActivationStatus] = useState<ActivationStatus>({
+    activated: !Boolean(window.novelDesktopApi?.getActivationStatus),
+    rawActivated: false,
+    email: '',
+    activatedAt: '',
+    currentMachineMac: '',
+    boundMachineMac: '',
+    machineBound: true,
+    mode: 'offline-v1',
+    projectLimit: 1,
+    localModelAllowed: Boolean(window.novelDesktopApi?.getActivationStatus)
+      ? false
+      : true
+  })
+  const [isOpeningActivationDialog, setIsOpeningActivationDialog] = useState(false)
+  const [isUnbindingMachine, setIsUnbindingMachine] = useState(false)
   const [isCheckingAppUpgrade, setIsCheckingAppUpgrade] = useState(false)
   const [isApplyingProjectSettings, setIsApplyingProjectSettings] = useState(false)
   const [projectSettingsNotice, setProjectSettingsNotice] = useState<{
@@ -1736,6 +1966,8 @@ function App() {
   const [result, setResult] = useState('')
   const [status, setStatus] = useState('就绪')
   const [connectionState, setConnectionState] = useState<ConnectionState>('unknown')
+  const [runtimeDiagnostics, setRuntimeDiagnostics] = useState<ModelRuntimeDiagnostics | null>(null)
+  const [runtimeRequestLogs, setRuntimeRequestLogs] = useState<ModelRequestLogItem[]>([])
   const [isRunning, setIsRunning] = useState(false)
   const [error, setError] = useState('')
   const [hasSelection, setHasSelection] = useState(false)
@@ -1860,7 +2092,13 @@ function App() {
   const [isBackupGraphPanning, setIsBackupGraphPanning] = useState(false)
   const [draggingBackupId, setDraggingBackupId] = useState<number | null>(null)
   const [hoveredBackupId, setHoveredBackupId] = useState<number | null>(null)
-  const [selectedBackupId, setSelectedBackupId] = useState<number | null>(null)
+  const [selectedBackupIds, setSelectedBackupIds] = useState<Set<number>>(new Set())
+  const [backupSelectionBox, setBackupSelectionBox] = useState<{
+    start: { x: number; y: number }
+    current: { x: number; y: number }
+    additive: boolean
+    baseSelectedIds: number[]
+  } | null>(null)
   const [backupDragOffset, setBackupDragOffset] = useState({ x: 0, y: 0 })
   const [backupActiveRelationMode, setBackupActiveRelationMode] = useState<RoleRelationMode>(
     DEFAULT_ROLE_RELATION_MODE
@@ -1923,6 +2161,7 @@ function App() {
   const [assistantInput, setAssistantInput] = useState('')
   const [assistantMessages, setAssistantMessages] = useState<AssistantChatMessage[]>([])
   const [assistantRunning, setAssistantRunning] = useState(false)
+  const [assistantProgressLogs, setAssistantProgressLogs] = useState<string[]>([])
   const [assistantDialogPos, setAssistantDialogPos] = useState({ x: 24, y: 24 })
   const [assistantDialogDragging, setAssistantDialogDragging] = useState(false)
   const [assistantDialogDragOffset, setAssistantDialogDragOffset] = useState({ x: 0, y: 0 })
@@ -1954,6 +2193,8 @@ function App() {
   const backupRelationsRef = useRef<BackupRelation[]>(backupRelations)
   const roleDragIdsRef = useRef<number[]>([])
   const roleDragOffsetsByIdRef = useRef<Record<number, { x: number; y: number }>>({})
+  const backupDragIdsRef = useRef<number[]>([])
+  const backupDragOffsetsByIdRef = useRef<Record<number, { x: number; y: number }>>({})
 
   const activeProject = useMemo(
     () => projects.find((project) => project.id === activeProjectId) ?? null,
@@ -2006,6 +2247,12 @@ function App() {
       : isConnecting
         ? '连接中...'
         : '立即连接'
+  const runtimeSkillsLoaded = runtimeDiagnostics?.skillsLoaded ?? Boolean(skillsPrompt.trim())
+  const runtimeSkillsInjected = runtimeDiagnostics?.skillsInjected ?? false
+  const runtimeSkillsHit = runtimeDiagnostics?.skillsHit ?? false
+  const runtimeSystemPreview = runtimeDiagnostics?.systemPromptPreview ?? ''
+  const visibleRuntimeLogs =
+    runtimeRequestLogs.length > 0 ? runtimeRequestLogs : (runtimeDiagnostics?.requestLogs ?? [])
   const currentSessionKey =
     activeChapter && activeVersion ? `${activeChapter.id}:${activeVersion.id}` : ''
 
@@ -2039,6 +2286,12 @@ function App() {
     setWritingMode(activeVersionWritingMode)
   }, [activeVersionWritingMode, writingMode])
   useEffect(() => {
+    setAssistantMessages(activeVersion?.assistantMessages ?? [])
+    setAssistantInput('')
+    setAssistantRunning(false)
+    setAssistantProgressLogs([])
+  }, [activeChapterId, activeVersion?.id])
+  useEffect(() => {
     chaptersRef.current = chapters
   }, [chapters])
   useEffect(() => {
@@ -2051,6 +2304,24 @@ function App() {
       setScriptRolePicker(null)
     }
   }, [activeVersionWritingMode])
+  useEffect(() => {
+    if (isWorkspaceBootstrapping) return
+    if (!activeChapter || !activeVersion) return
+    if (areSameAssistantMessages(activeVersion.assistantMessages, assistantMessages)) return
+    setChapters((previous) =>
+      previous.map((chapter) => {
+        if (chapter.id !== activeChapter.id) return chapter
+        return {
+          ...chapter,
+          versions: chapter.versions.map((version) =>
+            version.id === activeVersion.id
+              ? { ...version, assistantMessages: [...assistantMessages] }
+              : version
+          )
+        }
+      })
+    )
+  }, [assistantMessages, activeChapter, activeVersion, isWorkspaceBootstrapping])
   const isOverflowMenuVisible = isOverflowMenuOpen && overflowVersions.length > 0
   const installedSkillsCount = useMemo(
     () => skillCatalog.filter((skill) => skill.installed).length,
@@ -2294,17 +2565,28 @@ function App() {
       ),
     [backupRelations, visibleBackupIds]
   )
+  const backupSelectionBounds = useMemo(
+    () =>
+      backupSelectionBox
+        ? getRoleSelectionBounds(backupSelectionBox.start, backupSelectionBox.current)
+        : null,
+    [backupSelectionBox]
+  )
+  const focusedBackupId = useMemo(() => {
+    if (selectedBackupIds.size !== 1) return null
+    return Array.from(selectedBackupIds)[0] ?? null
+  }, [selectedBackupIds])
   const directlyConnectedBackupIds = useMemo(() => {
     const connected = new Set<number>()
-    if (selectedBackupId === null) return connected
-    connected.add(selectedBackupId)
+    if (focusedBackupId === null) return connected
+    connected.add(focusedBackupId)
     visibleBackupRelations.forEach((relation) => {
-      if (relation.fromBackupId === selectedBackupId) connected.add(relation.toBackupId)
-      if (relation.toBackupId === selectedBackupId) connected.add(relation.fromBackupId)
+      if (relation.fromBackupId === focusedBackupId) connected.add(relation.toBackupId)
+      if (relation.toBackupId === focusedBackupId) connected.add(relation.fromBackupId)
     })
     return connected
-  }, [selectedBackupId, visibleBackupRelations])
-  const shouldDimBackupGraph = selectedBackupId !== null
+  }, [focusedBackupId, visibleBackupRelations])
+  const shouldDimBackupGraph = focusedBackupId !== null
   const backupPositionById = useMemo(() => {
     const map = new Map<number, { x: number; y: number }>()
     filteredBackups.forEach((item, index) => {
@@ -2743,8 +3025,24 @@ function App() {
   }
 
   function buildWorkspaceSnapshot(): NormalizedWorkspace {
+    const chapterId = activeChapterRef.current?.id ?? activeChapterId
+    const versionId = activeVersionRef.current?.id ?? null
+    const normalizedChapters =
+      versionId === null
+        ? chapters
+        : chapters.map((chapter) => {
+            if (chapter.id !== chapterId) return chapter
+            return {
+              ...chapter,
+              versions: chapter.versions.map((version) =>
+                version.id === versionId && !areSameAssistantMessages(version.assistantMessages, assistantMessages)
+                  ? { ...version, assistantMessages: [...assistantMessages] }
+                  : version
+              )
+            }
+          })
     return {
-      chapters,
+      chapters: normalizedChapters,
       activeChapterId,
       writingMode,
       memory,
@@ -2763,6 +3061,13 @@ function App() {
   }
 
   function applyWorkspaceSnapshot(snapshot: NormalizedWorkspace) {
+    const snapshotActiveChapter =
+      snapshot.chapters.find((chapter) => chapter.id === snapshot.activeChapterId) ??
+      snapshot.chapters[0]
+    const snapshotActiveVersion =
+      snapshotActiveChapter?.versions.find(
+        (version) => version.id === snapshotActiveChapter.activeVersionId
+      ) ?? snapshotActiveChapter?.versions[0]
     setChapters(withOrderedChapterTitles(snapshot.chapters))
     setActiveChapterId(snapshot.activeChapterId)
     setWritingMode(snapshot.writingMode)
@@ -2781,7 +3086,10 @@ function App() {
     setActivePanel('memory')
     setResult('')
     setError('')
-    setConnectionState('unknown')
+    setAssistantMessages(snapshotActiveVersion?.assistantMessages ?? [])
+    setAssistantInput('')
+    setAssistantRunning(false)
+    setAssistantProgressLogs([])
     setMemorySearchQuery('')
     setMemoryModule('info')
     setRoleGraphView('list')
@@ -2813,8 +3121,11 @@ function App() {
     setBackupActiveRelationStrokeColor(DEFAULT_BACKUP_RELATION_STROKE_COLOR)
     setBackupActiveRelationLabelColor(DEFAULT_BACKUP_RELATION_LABEL_COLOR)
     setDraggingBackupId(null)
+    backupDragIdsRef.current = []
+    backupDragOffsetsByIdRef.current = {}
     setHoveredBackupId(null)
-    setSelectedBackupId(null)
+    setSelectedBackupIds(new Set())
+    setBackupSelectionBox(null)
     setBackupLinkStart(null)
     setBackupLinkTarget(null)
     setBackupLinkPreview(null)
@@ -3154,6 +3465,95 @@ function App() {
     }
   }
 
+  function toActivationStatus(payload: unknown): ActivationStatus {
+    const data = (payload && typeof payload === 'object' ? payload : {}) as Partial<ActivationStatus>
+    return {
+      activated: Boolean(data.activated),
+      rawActivated: Boolean(data.rawActivated ?? data.activated),
+      email: String(data.email || ''),
+      activatedAt: String(data.activatedAt || ''),
+      currentMachineMac: String(data.currentMachineMac || ''),
+      boundMachineMac: String(data.boundMachineMac || ''),
+      machineBound: Boolean(data.machineBound ?? true),
+      mode: String(data.mode || 'offline-v1'),
+      projectLimit: Number.isFinite(Number(data.projectLimit))
+        ? Number(data.projectLimit)
+        : 1,
+      localModelAllowed: Boolean(data.localModelAllowed ?? data.activated)
+    }
+  }
+
+  async function refreshActivationStatus() {
+    if (!window.novelDesktopApi?.getActivationStatus) return
+    try {
+      const payload = await window.novelDesktopApi.getActivationStatus()
+      const raw =
+        payload && typeof payload === 'object' && 'status' in payload
+          ? (payload as { status?: unknown }).status
+          : payload
+      setActivationStatus(toActivationStatus(raw))
+    } catch {
+      // ignore activation status errors
+    }
+  }
+
+  async function openActivationDialog(reason?: string) {
+    if (!window.novelDesktopApi?.openActivationDialog) return
+    if (isOpeningActivationDialog) return
+    setIsOpeningActivationDialog(true)
+    try {
+      const result = await window.novelDesktopApi.openActivationDialog({
+        reason:
+          reason ||
+          t(
+            '未激活版本仅支持一个项目且无法使用本地模型，请先激活。',
+            'Free mode supports one project only and no local models. Please activate.'
+          )
+      })
+      if (result?.status) {
+        setActivationStatus(toActivationStatus(result.status))
+      } else {
+        await refreshActivationStatus()
+      }
+      await refreshActivationStatus()
+      setStatus(result?.ok ? t('激活成功', 'Activated successfully') : t('激活状态已刷新', 'Activation status refreshed'))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('打开激活窗口失败', 'Failed to open activation dialog'))
+      setStatus(t('打开激活窗口失败', 'Failed to open activation dialog'))
+    } finally {
+      setIsOpeningActivationDialog(false)
+    }
+  }
+
+  async function unbindCurrentMachine() {
+    if (!window.novelDesktopApi?.unbindCurrentMachine) return
+    if (isUnbindingMachine) return
+    const confirmed = window.confirm(
+      t(
+        '确认取消本机绑定吗？取消后本机将回到未激活状态。',
+        'Unbind this machine now? This device will return to not activated state.'
+      )
+    )
+    if (!confirmed) return
+
+    setIsUnbindingMachine(true)
+    try {
+      const result = await window.novelDesktopApi.unbindCurrentMachine()
+      if (result?.status) {
+        setActivationStatus(toActivationStatus(result.status))
+      } else {
+        await refreshActivationStatus()
+      }
+      setStatus(t('已取消本机绑定', 'Machine unbound successfully'))
+    } catch (err) {
+      const message = err instanceof Error ? err.message : t('取消绑定失败', 'Failed to unbind machine')
+      setError(message)
+      setStatus(message)
+    } finally {
+      setIsUnbindingMachine(false)
+    }
+  }
+
   function openProject(projectId: string, loadedSnapshot?: NormalizedWorkspace) {
     const snapshot = loadedSnapshot ?? loadProjectWorkspace(projectId)
     if (!snapshot) {
@@ -3169,6 +3569,20 @@ function App() {
   }
 
   function openCreateProjectModal() {
+    if (
+      hasActivationSupport &&
+      !activationStatus.activated &&
+      projects.length >= activationStatus.projectLimit
+    ) {
+      setStatus(
+        t(
+          `未激活版本最多创建 ${activationStatus.projectLimit} 个项目，请先激活。`,
+          `Free mode allows up to ${activationStatus.projectLimit} project(s). Please activate first.`
+        )
+      )
+      void openActivationDialog('Free mode supports one project only. Activate to create more projects.')
+      return
+    }
     setNewProjectName('')
     setIsCreateProjectModalOpen(true)
   }
@@ -3179,6 +3593,20 @@ function App() {
   }
 
   function createProject(inputName?: string) {
+    if (
+      hasActivationSupport &&
+      !activationStatus.activated &&
+      projects.length >= activationStatus.projectLimit
+    ) {
+      setStatus(
+        t(
+          `未激活版本最多创建 ${activationStatus.projectLimit} 个项目，请先激活。`,
+          `Free mode allows up to ${activationStatus.projectLimit} project(s). Please activate first.`
+        )
+      )
+      void openActivationDialog('Free mode supports one project only. Activate to create more projects.')
+      return
+    }
     const nextName = String(inputName ?? newProjectName).trim()
     if (!nextName) {
       setStatus(t('请输入作品名称', 'Please enter a project name'))
@@ -3327,6 +3755,40 @@ function App() {
       .catch(() => {})
     return () => {
       cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    if (!window.novelDesktopApi?.getActivationStatus) return
+    void window.novelDesktopApi
+      .getActivationStatus()
+      .then((payload) => {
+        if (cancelled) return
+        const raw =
+          payload && typeof payload === 'object' && 'status' in payload
+            ? (payload as { status?: unknown }).status
+            : payload
+        setActivationStatus(toActivationStatus(raw))
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!window.novelDesktopApi?.getActivationStatus) return
+    const timer = window.setInterval(() => {
+      void refreshActivationStatus()
+    }, 30000)
+    const onFocus = () => {
+      void refreshActivationStatus()
+    }
+    window.addEventListener('focus', onFocus)
+    return () => {
+      window.clearInterval(timer)
+      window.removeEventListener('focus', onFocus)
     }
   }, [])
 
@@ -3561,8 +4023,11 @@ function App() {
   useEffect(() => {
     if (isBackupGraphActive) return
     setDraggingBackupId(null)
+    backupDragIdsRef.current = []
+    backupDragOffsetsByIdRef.current = {}
     setHoveredBackupId(null)
-    setSelectedBackupId(null)
+    setSelectedBackupIds(new Set())
+    setBackupSelectionBox(null)
     setBackupLinkStart(null)
     setBackupLinkTarget(null)
     setBackupLinkPreview(null)
@@ -4111,6 +4576,28 @@ function App() {
   ])
 
   useEffect(() => {
+    if (!isBackupGraphActive) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Delete') return
+      if (selectedBackupIds.size === 0) return
+      if (isTypingTarget(event.target)) return
+      if (backupEditorDialog || backupRelationEditorDialog || backupNodeMenu.open) return
+      event.preventDefault()
+      deleteBackups(Array.from(selectedBackupIds))
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown, true)
+    }
+  }, [
+    isBackupGraphActive,
+    selectedBackupIds,
+    backupEditorDialog,
+    backupRelationEditorDialog,
+    backupNodeMenu.open
+  ])
+
+  useEffect(() => {
     if (!window.novelDesktopApi?.listSkills) return
     let cancelled = false
     void window.novelDesktopApi
@@ -4141,6 +4628,33 @@ function App() {
 
   const canRunSelectionActions =
     hasSelection || selectedSnippet.trim().length > 0
+  const isModelBusy = isRunning || assistantRunning
+  const isModelUnavailable = connectionState === 'checking' || connectionState === 'failed'
+  const assistantSendDisabled =
+    assistantRunning || isModelUnavailable || !assistantInput.trim()
+  const assistantSendLoading = assistantRunning || connectionState === 'checking'
+  const assistantSendLabel = assistantRunning
+    ? '发送中'
+    : connectionState === 'checking'
+      ? '模型启动中'
+      : connectionState === 'failed'
+        ? '模型不可用'
+        : '发送'
+  const editorContextModelStatusState = isModelBusy
+    ? 'busy'
+    : connectionState === 'checking'
+      ? 'checking'
+      : connectionState === 'failed'
+        ? 'failed'
+        : ''
+  const editorContextModelStatusTip =
+    editorContextModelStatusState === 'busy'
+      ? '模型正在运行中...'
+      : editorContextModelStatusState === 'checking'
+        ? '大模型启动中，请稍后再试'
+        : editorContextModelStatusState === 'failed'
+          ? '当前大模型不可用，可能未启动'
+          : ''
   const filteredScriptRolePickerOptions = useMemo(() => {
     if (!scriptRolePicker) return scriptRolePickerOptions
     const keyword = scriptRolePicker.query.trim().toLowerCase()
@@ -4176,6 +4690,21 @@ function App() {
   const hasDesktopProjectImport = Boolean(window.novelDesktopApi?.importProjectPackages)
   const hasDesktopWindowClose = Boolean(window.novelDesktopApi?.closeWindow)
   const hasDesktopWindowControls = Boolean(window.novelDesktopApi?.isDesktop)
+  const hasActivationSupport = Boolean(window.novelDesktopApi?.getActivationStatus)
+  const activationLabel = activationStatus.activated
+    ? t('已激活', 'Activated')
+    : t('未激活', 'Not Activated')
+  const activationTooltip = activationStatus.activated
+    ? t('软件已激活，可使用全部功能', 'Software activated. Full features available.')
+    : t(
+        '当前未激活：仅可创建 1 个项目，且不能使用本地模型',
+        'Not activated: only 1 project and no local models.'
+      )
+  const canUnbindCurrentMachine = Boolean(
+    hasActivationSupport && (activationStatus.rawActivated ?? activationStatus.activated)
+  )
+  const currentMachineMacLabel = activationStatus.currentMachineMac || '--'
+  const boundMachineMacLabel = activationStatus.boundMachineMac || '--'
   const dashboardGreeting =
     appLanguage === 'en-US'
       ? new Date().getHours() < 6
@@ -4235,28 +4764,28 @@ function App() {
       label: '1 续写',
       shortcut: '',
       run: () => runAction(actions[0]),
-      disabled: isRunning || !canRunSelectionActions
+      disabled: isModelBusy || isModelUnavailable || !canRunSelectionActions
     },
     {
       key: 'polish',
       label: '2 润色',
       shortcut: '',
       run: () => runAction(actions[1]),
-      disabled: isRunning || !canRunSelectionActions
+      disabled: isModelBusy || isModelUnavailable || !canRunSelectionActions
     },
     {
       key: 'expand',
       label: '3 扩写',
       shortcut: '',
       run: () => runAction(actions[2]),
-      disabled: isRunning || !canRunSelectionActions
+      disabled: isModelBusy || isModelUnavailable || !canRunSelectionActions
     },
     {
       key: 'memory',
       label: '4 记忆',
       shortcut: '',
       run: () => runAction(actions[3]),
-      disabled: isRunning || !canRunSelectionActions
+      disabled: isModelBusy || isModelUnavailable || !canRunSelectionActions
     },
     {
       key: 'role-memory',
@@ -4272,7 +4801,7 @@ function App() {
         setMemoryModule('role')
         setStatus('已保存到角色')
       },
-      disabled: isRunning || !canRunSelectionActions
+      disabled: isModelBusy || !canRunSelectionActions
     },
     {
       key: 'backup',
@@ -4283,7 +4812,7 @@ function App() {
         if (!input) return
         createBackup(input, '选中文本参考')
       },
-      disabled: isRunning || !canRunSelectionActions
+      disabled: isModelBusy || !canRunSelectionActions
     },
     { key: 'divider-ai', divider: true },
     {
@@ -4475,6 +5004,16 @@ function App() {
           baseUrl,
           includeCloud
         })
+        if (typeof payload?.error === 'string' && payload.error.trim()) {
+          if (!silent) {
+            setError(payload.error)
+            setStatus('加载 Ollama 模型失败')
+          }
+          setLocalOllamaModels([])
+          setCloudOllamaModels([])
+          setOllamaModels([])
+          return
+        }
         models = Array.isArray(payload?.models)
           ? payload.models.filter(
               (item): item is string => typeof item === 'string' && Boolean(item.trim())
@@ -4569,7 +5108,12 @@ function App() {
   }, [config.kind, config.baseUrl, loadCloudModels])
 
   useEffect(() => {
-    setConnectionState('unknown')
+    const signature = buildModelConnectionSignature(config)
+    const restoredConnected =
+      Boolean(signature) && persistedConnectionSignatureRef.current === signature
+    setConnectionState(restoredConnected ? 'connected' : 'unknown')
+    setRuntimeDiagnostics(null)
+    setRuntimeRequestLogs([])
   }, [config.kind, config.baseUrl, config.model, config.apiKey])
 
   useEffect(() => {
@@ -4939,6 +5483,54 @@ function App() {
       .map((selection) => model.getValueInRange(selection))
       .filter((text) => text.trim().length > 0)
     return texts.join('\n\n')
+  }
+
+  function readSelectionRangesFromEditor(): EditorSelectionRange[] {
+    const editor = editorRef.current
+    if (!editor) return []
+    return (editor.getSelections() ?? [])
+      .filter((selection) => selection && !selection.isEmpty())
+      .map((selection) => ({
+        startLineNumber: selection.startLineNumber,
+        startColumn: selection.startColumn,
+        endLineNumber: selection.endLineNumber,
+        endColumn: selection.endColumn
+      }))
+  }
+
+  function applyAssistantSelectionUpdate(
+    selectionRanges: EditorSelectionRange[],
+    updatedSelection: string,
+    originalSelectedText: string
+  ) {
+    const editor = editorRef.current
+    const monaco = monacoRef.current
+    if (editor && monaco && selectionRanges.length > 0) {
+      editor.executeEdits(
+        'assistant-selection-update',
+        selectionRanges.map((selection) => ({
+          range: new monaco.Range(
+            selection.startLineNumber,
+            selection.startColumn,
+            selection.endLineNumber,
+            selection.endColumn
+          ),
+          text: updatedSelection
+        }))
+      )
+      editor.focus()
+      refreshSelectionState()
+      return true
+    }
+
+    const source = originalSelectedText.trim()
+    if (!source) return false
+    const index = currentDraft.indexOf(source)
+    if (index < 0) return false
+    const nextDraft =
+      currentDraft.slice(0, index) + updatedSelection + currentDraft.slice(index + source.length)
+    updateActiveDraft(nextDraft)
+    return true
   }
 
   function refreshSelectionState() {
@@ -5615,15 +6207,78 @@ function App() {
     setStatus('已保存到共享参考库')
   }
 
-  function deleteBackup(backupId: number) {
-    setBackups((previous) => previous.filter((backup) => backup.id !== backupId))
-    setBackupRelations((previous) =>
-      previous.filter(
-        (relation) =>
-          relation.fromBackupId !== backupId && relation.toBackupId !== backupId
-      )
+  function collectBackupIdsInBounds(bounds: {
+    minX: number
+    minY: number
+    maxX: number
+    maxY: number
+  }) {
+    const ids: number[] = []
+    for (const item of filteredBackups) {
+      const position = backupPositionById.get(item.id) ?? getBackupNodePosition(item, 0)
+      const nodeMinX = position.x
+      const nodeMinY = position.y
+      const nodeMaxX = position.x + BACKUP_NODE_WIDTH
+      const nodeMaxY = position.y + BACKUP_NODE_HEIGHT
+      const intersects =
+        bounds.maxX >= nodeMinX &&
+        bounds.minX <= nodeMaxX &&
+        bounds.maxY >= nodeMinY &&
+        bounds.minY <= nodeMaxY
+      if (intersects) ids.push(item.id)
+    }
+    return ids
+  }
+
+  function applyBackupSelectionByBox(box: {
+    start: { x: number; y: number }
+    current: { x: number; y: number }
+    additive: boolean
+    baseSelectedIds: number[]
+  }) {
+    const bounds = getRoleSelectionBounds(box.start, box.current)
+    const idsInBounds = collectBackupIdsInBounds(bounds)
+    const next = new Set<number>(box.additive ? box.baseSelectedIds : [])
+    idsInBounds.forEach((id) => next.add(id))
+    setSelectedBackupIds(next)
+  }
+
+  function deleteBackups(backupIds: number[]) {
+    const uniqueIds = [...new Set(backupIds)]
+    if (!uniqueIds.length) return
+    const backupIdSet = new Set(uniqueIds)
+    const nextRelations = backupRelationsRef.current.filter(
+      (relation) =>
+        !backupIdSet.has(relation.fromBackupId) && !backupIdSet.has(relation.toBackupId)
     )
-    setStatus('已删除参考')
+    setBackups((previous) => previous.filter((backup) => !backupIdSet.has(backup.id)))
+    setBackupRelations(nextRelations)
+    backupRelationsRef.current = nextRelations
+    setSelectedBackupIds((previous) => {
+      if (!previous.size) return previous
+      const next = new Set<number>()
+      previous.forEach((id) => {
+        if (!backupIdSet.has(id)) next.add(id)
+      })
+      return next
+    })
+    setBackupSelectionBox(null)
+    backupDragIdsRef.current = []
+    backupDragOffsetsByIdRef.current = {}
+    setDraggingBackupId(null)
+    setBackupNodeMenu({ open: false, x: 0, y: 0, backupId: null })
+    setBackupRelationMenu({ open: false, x: 0, y: 0, relationId: null })
+    setBackupEditorDialog((previous) =>
+      previous && backupIdSet.has(previous.backupId) ? null : previous
+    )
+    setBackupRelationEditorDialog((previous) =>
+      previous && nextRelations.some((item) => item.id === previous.relationId) ? previous : null
+    )
+    setStatus(`已删除 ${uniqueIds.length} 个参考事件`)
+  }
+
+  function deleteBackup(backupId: number) {
+    deleteBackups([backupId])
   }
 
   function updateBackup(
@@ -6374,20 +7029,47 @@ function normalizeScriptRoleName(raw: string) {
     if (isBackupGraphSpacePressed || isBackupGraphPanning) return
     if (event.button !== 0) return
     if (backupLinkStart !== null || draggingBackupRelationCurve !== null) return
-    const boardPoint = getBackupGraphPointFromClient(event.clientX, event.clientY)
-    if (!boardPoint) return
-    const position = backupPositionById.get(backupId)
-    if (!position) return
     event.preventDefault()
     event.stopPropagation()
+    setBackupSelectionBox(null)
     setBackupRelationMenu({ open: false, x: 0, y: 0, relationId: null })
     setBackupNodeMenu({ open: false, x: 0, y: 0, backupId: null })
-    setSelectedBackupId(backupId)
-    setDraggingBackupId(backupId)
-    setBackupDragOffset({
-      x: boardPoint.x - position.x,
-      y: boardPoint.y - position.y
+    if (event.ctrlKey || event.metaKey || event.shiftKey) {
+      setSelectedBackupIds((previous) => {
+        const next = new Set(previous)
+        if (next.has(backupId)) next.delete(backupId)
+        else next.add(backupId)
+        return next
+      })
+      return
+    }
+    const boardPoint = getBackupGraphPointFromClient(event.clientX, event.clientY)
+    if (!boardPoint) return
+    if (!backupPositionById.has(backupId)) return
+    const currentSelected = new Set(selectedBackupIds)
+    const nextSelected =
+      currentSelected.has(backupId) && currentSelected.size > 1
+        ? currentSelected
+        : new Set([backupId])
+    setSelectedBackupIds(nextSelected)
+    const dragIds = Array.from(nextSelected)
+    const nextOffsets: Record<number, { x: number; y: number }> = {}
+    dragIds.forEach((id) => {
+      const nodePosition = backupPositionById.get(id)
+      if (!nodePosition) return
+      nextOffsets[id] = {
+        x: boardPoint.x - nodePosition.x,
+        y: boardPoint.y - nodePosition.y
+      }
     })
+    if (Object.keys(nextOffsets).length === 0) return
+    backupDragIdsRef.current = dragIds
+    backupDragOffsetsByIdRef.current = nextOffsets
+    const anchorOffset = nextOffsets[backupId]
+    if (anchorOffset) {
+      setBackupDragOffset(anchorOffset)
+    }
+    setDraggingBackupId(backupId)
   }
 
   function beginBackupGraphPan(event: ReactMouseEvent<HTMLDivElement>) {
@@ -6404,11 +7086,16 @@ function normalizeScriptRoleName(raw: string) {
       }
       setIsBackupGraphPanning(true)
       if (draggingBackupId !== null) setDraggingBackupId(null)
+      backupDragIdsRef.current = []
+      backupDragOffsetsByIdRef.current = {}
       if (backupLinkStart !== null) {
         setBackupLinkStart(null)
         setBackupLinkTarget(null)
         setBackupLinkPreview(null)
       }
+      setBackupSelectionBox(null)
+      setBackupNodeMenu({ open: false, x: 0, y: 0, backupId: null })
+      setBackupRelationMenu({ open: false, x: 0, y: 0, relationId: null })
       return
     }
     if (!isPrimaryDrag) return
@@ -6421,13 +7108,22 @@ function normalizeScriptRoleName(raw: string) {
     ) {
       return
     }
+    const pointer = getBackupGraphPointFromClient(event.clientX, event.clientY)
+    if (!pointer) return
+    const additive = event.ctrlKey || event.metaKey || event.shiftKey
+    setBackupSelectionBox({
+      start: pointer,
+      current: pointer,
+      additive,
+      baseSelectedIds: additive ? Array.from(selectedBackupIds) : []
+    })
+    if (!additive) setSelectedBackupIds(new Set())
     if (backupRelationMenu.open) {
       setBackupRelationMenu({ open: false, x: 0, y: 0, relationId: null })
     }
     if (backupNodeMenu.open) {
       setBackupNodeMenu({ open: false, x: 0, y: 0, backupId: null })
     }
-    setSelectedBackupId(null)
   }
 
   function handleBackupGraphDoubleClick(event: ReactMouseEvent<HTMLDivElement>) {
@@ -6584,7 +7280,9 @@ function normalizeScriptRoleName(raw: string) {
   function openBackupNodeContextMenu(event: ReactMouseEvent<HTMLElement>, backupId: number) {
     event.preventDefault()
     event.stopPropagation()
-    setSelectedBackupId(backupId)
+    if (!selectedBackupIds.has(backupId)) {
+      setSelectedBackupIds(new Set([backupId]))
+    }
     setBackupNodeMenu({
       open: true,
       x: event.clientX,
@@ -6683,6 +7381,15 @@ function normalizeScriptRoleName(raw: string) {
     }
     const pointer = getBackupGraphPointFromClient(event.clientX, event.clientY)
     if (!pointer) return
+    if (backupSelectionBox !== null) {
+      const nextBox = {
+        ...backupSelectionBox,
+        current: pointer
+      }
+      setBackupSelectionBox(nextBox)
+      applyBackupSelectionByBox(nextBox)
+      return
+    }
     if (draggingBackupRelationCurve !== null) {
       const relation = backupRelationsRef.current.find(
         (item) => item.id === draggingBackupRelationCurve.relationId
@@ -6725,9 +7432,27 @@ function normalizeScriptRoleName(raw: string) {
       }
     }
     if (draggingBackupId === null) return
-    const nextX = Math.max(0, pointer.x - backupDragOffset.x)
-    const nextY = Math.max(0, pointer.y - backupDragOffset.y)
-    updateBackup(draggingBackupId, { backupX: nextX, backupY: nextY })
+    const dragIds = backupDragIdsRef.current
+    const offsetById = backupDragOffsetsByIdRef.current
+    if (!dragIds.length || !Object.keys(offsetById).length) {
+      const nextX = Math.max(0, pointer.x - backupDragOffset.x)
+      const nextY = Math.max(0, pointer.y - backupDragOffset.y)
+      updateBackup(draggingBackupId, { backupX: nextX, backupY: nextY })
+      return
+    }
+    const dragIdSet = new Set(dragIds)
+    setBackups((previous) =>
+      previous.map((item) => {
+        if (!dragIdSet.has(item.id)) return item
+        const offset = offsetById[item.id]
+        if (!offset) return item
+        return {
+          ...item,
+          backupX: Math.max(0, pointer.x - offset.x),
+          backupY: Math.max(0, pointer.y - offset.y)
+        }
+      })
+    )
   }
 
   function handleBackupGraphMouseUp(event: ReactMouseEvent<HTMLDivElement>) {
@@ -6737,12 +7462,26 @@ function normalizeScriptRoleName(raw: string) {
       backupGraphPanStartRef.current = null
     }
     if (wasPanning) return
+    if (backupSelectionBox !== null) {
+      const pointer = getBackupGraphPointFromClient(event.clientX, event.clientY)
+      if (pointer) {
+        const nextBox = {
+          ...backupSelectionBox,
+          current: pointer
+        }
+        applyBackupSelectionByBox(nextBox)
+      }
+      setBackupSelectionBox(null)
+      return
+    }
     if (draggingBackupRelationCurve !== null) {
       setDraggingBackupRelationCurve(null)
       return
     }
     if (draggingBackupId !== null) {
       setDraggingBackupId(null)
+      backupDragIdsRef.current = []
+      backupDragOffsetsByIdRef.current = {}
     }
     if (backupLinkStart === null) return
     const pointer = getBackupGraphPointFromClient(event.clientX, event.clientY)
@@ -6785,7 +7524,15 @@ function normalizeScriptRoleName(raw: string) {
     setStatus(`已跳转到 ${chapter.title} / ${version.title}`)
   }
 
-  async function askModel(instruction: string, input: string) {
+  async function askModel(
+    instruction: string,
+    input: string,
+    options?: { onProgress?: (message: string) => void }
+  ) {
+    const reportProgress = (message: string) => {
+      options?.onProgress?.(message)
+    }
+    reportProgress('整理当前章节上下文')
     const provider = config.kind
     const baseUrl = normalizeBaseUrl(config.baseUrl, provider)
     const infoMemoryItems = memory
@@ -6822,10 +7569,40 @@ function normalizeScriptRoleName(raw: string) {
       })
       .filter(Boolean)
     const memoryItems = [...infoMemoryItems, ...roleMemoryItems, ...relationItems]
+    reportProgress(`已汇总记忆与关系：${memoryItems.length} 条`)
     const sessionId = ensureCurrentSessionId()
+    const nowIso = new Date().toISOString()
+    const buildFallbackDiagnostics = (systemContent: string, output: string): ModelRuntimeDiagnostics => {
+      const skillsLoaded = Boolean(skillsPrompt.trim())
+      return {
+        generatedAt: nowIso,
+        skillsLoaded,
+        skillsInjected: skillsLoaded,
+        skillsHit: skillsLoaded && Boolean(output.trim()),
+        injectedThisRequest: skillsLoaded,
+        skillsPromptHash: skillsLoaded ? `inline-${skillsPrompt.trim().length}` : '',
+        systemPromptHash: `inline-${systemContent.length}`,
+        systemPromptPreview: systemContent,
+        latestRequest: {
+          id: `inline-${Date.now()}`,
+          createdAt: nowIso,
+          provider,
+          model: config.model,
+          baseUrl,
+          instructionChars: instruction.length,
+          inputChars: input.length,
+          memoryCount: memoryItems.length,
+          skillsLoaded,
+          skillsInjected: skillsLoaded,
+          injectedThisRequest: skillsLoaded
+        },
+        requestLogs: runtimeRequestLogs
+      }
+    }
 
     if (window.novelDesktopApi?.generate && sessionId) {
-      const result = await window.novelDesktopApi.generate({
+      reportProgress('正在请求推理模型')
+      const response = await window.novelDesktopApi.generate({
         provider,
         baseUrl,
         model: config.model,
@@ -6835,9 +7612,17 @@ function normalizeScriptRoleName(raw: string) {
         instruction,
         input,
         memory: memoryItems,
-        skillsPrompt,
+        skillsPrompt
       })
-      return result.output?.trim() ?? ''
+      const diagnostics = (response as { diagnostics?: ModelRuntimeDiagnostics }).diagnostics
+      if (diagnostics) {
+        setRuntimeDiagnostics(diagnostics)
+        setRuntimeRequestLogs(
+          Array.isArray(diagnostics.requestLogs) ? diagnostics.requestLogs : []
+        )
+      }
+      reportProgress('模型返回完成，正在整理结果')
+      return response.output?.trim() ?? ''
     }
 
     const systemContent = [
@@ -6858,6 +7643,7 @@ function normalizeScriptRoleName(raw: string) {
     ]
 
     if (provider === 'ollama') {
+      reportProgress('通过 Ollama 接口请求模型')
       const response = await fetch(`${baseUrl}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -6874,9 +7660,15 @@ function normalizeScriptRoleName(raw: string) {
         error?: string
       }
       if (data.error) throw new Error(data.error)
-      return data.message?.content?.trim() ?? ''
+      const output = data.message?.content?.trim() ?? ''
+      const diagnostics = buildFallbackDiagnostics(systemContent, output)
+      setRuntimeDiagnostics(diagnostics)
+      setRuntimeRequestLogs((previous) => [diagnostics.latestRequest!, ...previous].slice(0, 12))
+      reportProgress('模型返回完成，正在整理结果')
+      return output
     }
 
+    reportProgress('通过 OpenAI 接口请求模型')
     const response = await fetch(buildOpenAiUrl(baseUrl), {
       method: 'POST',
       headers: {
@@ -6895,10 +7687,19 @@ function normalizeScriptRoleName(raw: string) {
       error?: { message?: string }
     }
     if (data.error?.message) throw new Error(data.error.message)
-    return data.choices?.[0]?.message?.content?.trim() ?? ''
+    const output = data.choices?.[0]?.message?.content?.trim() ?? ''
+    const diagnostics = buildFallbackDiagnostics(systemContent, output)
+    setRuntimeDiagnostics(diagnostics)
+    setRuntimeRequestLogs((previous) => [diagnostics.latestRequest!, ...previous].slice(0, 12))
+    reportProgress('模型返回完成，正在整理结果')
+    return output
   }
 
   async function runAction(action: WriterAction | 'custom') {
+    if (assistantRunning) {
+      setStatus('小助手处理中，请稍后再执行扩写/润色')
+      return
+    }
     const input = (selectedSnippet || readSelectedTextFromEditor()).trim()
     if (!input) {
       setStatus('请先选中文本')
@@ -6948,7 +7749,12 @@ function normalizeScriptRoleName(raw: string) {
   }
 
   async function testConnection(options?: { auto?: boolean }) {
+    if (assistantRunning) {
+      setStatus('小助手处理中，请稍后再测试连接')
+      return
+    }
     const isAuto = options?.auto === true
+    const connectionSignature = buildModelConnectionSignature(config)
     setIsRunning(true)
     setError('')
     setConnectionState('checking')
@@ -6961,11 +7767,17 @@ function normalizeScriptRoleName(raw: string) {
       if (!isAuto) {
         setResult(output || 'OK')
       }
+      persistedConnectionSignatureRef.current = connectionSignature
+      persistModelConnectionSignature(connectionSignature)
       setConnectionState('connected')
       setStatus('连接正常')
     } catch (err) {
       const message = err instanceof Error ? err.message : '连接失败'
       setError(message)
+      if (persistedConnectionSignatureRef.current === connectionSignature) {
+        persistedConnectionSignatureRef.current = ''
+      }
+      clearPersistedModelConnectionSignature(connectionSignature)
       setConnectionState('failed')
       setStatus('连接失败')
       if (isAuto) {
@@ -6989,6 +7801,8 @@ function normalizeScriptRoleName(raw: string) {
     if (!currentSessionKey) return
     const nextSessionId = createSessionId()
     setSessionMap((previous) => ({ ...previous, [currentSessionKey]: nextSessionId }))
+    setRuntimeDiagnostics(null)
+    setRuntimeRequestLogs([])
     setStatus('已重置当前会话')
   }
 
@@ -7070,14 +7884,14 @@ function normalizeScriptRoleName(raw: string) {
     if (!result) return
     const editor = editorRef.current
     if (!editor) {
-      updateActiveDraft(result)
+      setStatus('未检测到编辑器选区，请先选中文本后再替换')
       return
     }
     const selections = (editor.getSelections() ?? []).filter(
       (selection) => selection && !selection.isEmpty()
     )
     if (!selections.length) {
-      updateActiveDraft(result)
+      setStatus('请先选中文本后再替换')
       return
     }
     editor.executeEdits(
@@ -7093,6 +7907,48 @@ function normalizeScriptRoleName(raw: string) {
     const items = result.split('\n')
     appendMemoryItems(items)
     setStatus('已保存到记忆')
+  }
+
+  async function copyResultToClipboard() {
+    if (!result) return
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(result)
+      } else {
+        const helper = document.createElement('textarea')
+        helper.value = result
+        helper.style.position = 'fixed'
+        helper.style.left = '-9999px'
+        helper.style.top = '0'
+        document.body.appendChild(helper)
+        helper.focus()
+        helper.select()
+        document.execCommand('copy')
+        document.body.removeChild(helper)
+      }
+      setStatus('已复制输出')
+    } catch {
+      setStatus('复制失败，请手动复制')
+    }
+  }
+
+  function appendResultToDraft() {
+    if (!result) return
+    const prefix = currentDraft.trim() ? '\n\n' : ''
+    updateActiveDraft(`${currentDraft}${prefix}${result}`)
+    setStatus('已追加到正文末尾')
+  }
+
+  function overwriteDraftWithResult() {
+    if (!result) return
+    updateActiveDraft(result)
+    setStatus('已用输出覆盖正文')
+  }
+
+  function clearResultOutput() {
+    if (!result) return
+    setResult('')
+    setStatus('已清空输出')
   }
 
   function openAssistantDialog() {
@@ -7126,8 +7982,32 @@ function normalizeScriptRoleName(raw: string) {
   }
 
   async function sendAssistantMessage() {
+    if (isRunning) {
+      setStatus('模型正在执行其他任务，请稍后再使用小助手')
+      return
+    }
+    if (connectionState === 'checking') {
+      setStatus('大模型启动中，请稍后再试')
+      return
+    }
+    if (connectionState === 'failed') {
+      setStatus('当前大模型不可用，请先连接模型')
+      return
+    }
     const message = assistantInput.trim()
     if (!message) return
+    const selectedText = (selectedSnippet || readSelectedTextFromEditor()).trim()
+    const selectionRanges = readSelectionRangesFromEditor()
+    const hasSelection = selectedText.length > 0
+    const editRequested = isAssistantEditRequest(message)
+    const pushProgress = (step: string) => {
+      const time = new Date().toLocaleTimeString('zh-CN', { hour12: false })
+      setAssistantProgressLogs((previous) => {
+        const line = `${time} · ${step}`
+        if (previous[previous.length - 1] === line) return previous
+        return [...previous, line]
+      })
+    }
     const nextUserMessage: AssistantChatMessage = {
       id: Date.now(),
       role: 'user',
@@ -7138,33 +8018,46 @@ function normalizeScriptRoleName(raw: string) {
     setAssistantMessages(conversation)
     setAssistantInput('')
     setAssistantRunning(true)
+    setAssistantProgressLogs([])
     setError('')
     setStatus('小助手思考中')
+    pushProgress('已接收你的需求')
 
     try {
+      pushProgress('正在读取当前版本正文')
       const conversationText = conversation
         .slice(-14)
         .map((item) => `${item.role === 'user' ? '用户' : '助手'}：${item.content}`)
         .join('\n')
+      pushProgress('正在整理历史对话与记忆上下文')
       const output = await askModel(
         `你是桌面写作软件中的“小助手”。你需要与用户多轮聊天，并在用户要求时直接修改当前版本正文。
 必须返回 JSON，格式固定为：
-{"reply":"回复用户的话","apply":true或false,"updatedDraft":"当apply=true时返回完整的新正文，否则返回空字符串"}
+{"reply":"回复用户的话","apply":true或false,"scope":"none|selection|full","updatedSelection":"当scope=selection时返回改写后的选中内容","updatedDraft":"当scope=full时返回完整新正文"}
 
 规则：
 1) reply 用中文，简洁直接；
-2) 只有用户明确要求修改正文时，apply 才为 true；
-3) apply=true 时，updatedDraft 必须是完整正文，不要只给片段；
-4) 不要输出 JSON 以外的内容。`,
+2) 只要用户输入出现“改/替换/扩写/润色/精简/重写”等修改请求，apply 必须为 true；
+3) 当用户要求“扩写/润色/改写选中内容”且存在选中内容时：scope 必须为 selection，只返回 updatedSelection，不能改动整篇；
+4) 只有用户明确要求整章/整篇重写时，scope 才为 full，并返回 updatedDraft；
+5) apply=false 时 scope 必须为 none，updatedSelection 和 updatedDraft 置空；
+6) 不要输出 JSON 以外的内容。`,
         `当前正文：
 ${currentDraft}
+
+当前选中内容（无则为空）：
+${selectedText || '(空)'}
 
 最近对话：
 ${conversationText}
 
 用户最新消息：
-${message}`
+${message}`,
+        {
+          onProgress: (msg) => pushProgress(msg)
+        }
       )
+      pushProgress('正在解析返回内容')
       const parsed = parseAssistantModelOutput(output)
       const assistantReply: AssistantChatMessage = {
         id: Date.now() + 1,
@@ -7173,15 +8066,111 @@ ${message}`
         createdAt: nowLabel()
       }
       setAssistantMessages((previous) => [...previous, assistantReply])
-
-      if (parsed.apply && parsed.updatedDraft.trim()) {
-        updateActiveDraft(parsed.updatedDraft.trim())
-        setResult(parsed.updatedDraft.trim())
-        setActivePanel('result')
-        setStatus('小助手已更新当前版本')
+      let appliedByModel = false
+      if (parsed.apply) {
+        if (parsed.scope === 'selection') {
+          if (!hasSelection || !parsed.updatedSelection.trim()) {
+            setStatus('当前没有可应用的选中内容，请重新选择后再试')
+          } else {
+            pushProgress('正在应用选中片段改稿')
+            const applied = applyAssistantSelectionUpdate(
+              selectionRanges,
+              parsed.updatedSelection.trim(),
+              selectedText
+            )
+            if (applied) {
+              setResult(parsed.updatedSelection.trim())
+              setActivePanel('result')
+              setStatus('小助手已更新选中片段')
+              appliedByModel = true
+            } else {
+              setStatus('未能定位原选中片段，请重新选择后再试')
+            }
+          }
+        } else if (parsed.scope === 'full' && parsed.updatedDraft.trim()) {
+          pushProgress('正在应用整篇改稿到当前版本')
+          updateActiveDraft(parsed.updatedDraft.trim())
+          setResult(parsed.updatedDraft.trim())
+          setActivePanel('result')
+          setStatus('小助手已更新当前版本')
+          appliedByModel = true
+        } else {
+          setStatus('小助手已回复')
+        }
       } else {
         setStatus('小助手已回复')
       }
+      if (editRequested && !appliedByModel) {
+        const fallbackScope = resolveAssistantFallbackScope(message, hasSelection)
+        pushProgress('模型未返回可应用改稿，正在进行自然语言改稿重试')
+        const fallbackInput =
+          fallbackScope === 'selection'
+            ? `用户要求（必须执行）：${message}
+
+选中原文：
+${selectedText || '(空)'}`
+            : `用户要求（必须执行）：${message}
+
+当前正文：
+${currentDraft}`
+        const fallbackOutput = (
+          await askModel(
+            fallbackScope === 'selection'
+              ? `你是中文小说改稿引擎。请根据用户要求直接改写“选中原文”，并严格遵守：
+1) 只输出改写后的正文，不要解释，不要引号，不要代码块；
+2) 必须保留原有剧情事实，不得改写成无关内容；
+3) 只改这一段，不得新增“已收到/说明文字”。`
+              : `你是中文小说改稿引擎。请根据用户要求直接改写“当前正文”，并严格遵守：
+1) 只输出改写后的完整正文，不要解释，不要引号，不要代码块；
+2) 必须保留主线剧情与角色关系，不得偏题；
+3) 不要输出“已收到/处理中”等确认语。`,
+            fallbackInput,
+            {
+              onProgress: (msg) => pushProgress(msg)
+            }
+          )
+        ).trim()
+
+        if (fallbackOutput) {
+          if (fallbackScope === 'selection' && hasSelection) {
+            const applied = applyAssistantSelectionUpdate(selectionRanges, fallbackOutput, selectedText)
+            if (applied) {
+              setResult(fallbackOutput)
+              setActivePanel('result')
+              setStatus('小助手已更新选中片段')
+              setAssistantMessages((previous) => [
+                ...previous,
+                {
+                  id: Date.now() + 3,
+                  role: 'assistant',
+                  content: '已按你的自然语言要求完成选中片段改稿。',
+                  createdAt: nowLabel()
+                }
+              ])
+              appliedByModel = true
+            }
+          } else {
+            updateActiveDraft(fallbackOutput)
+            setResult(fallbackOutput)
+            setActivePanel('result')
+            setStatus('小助手已更新当前版本')
+            setAssistantMessages((previous) => [
+              ...previous,
+              {
+                id: Date.now() + 3,
+                role: 'assistant',
+                content: '已按你的自然语言要求完成当前版本改稿。',
+                createdAt: nowLabel()
+              }
+            ])
+            appliedByModel = true
+          }
+        }
+        if (!appliedByModel) {
+          setStatus('未得到可应用的改稿结果，请换个说法再试')
+        }
+      }
+      pushProgress('处理完成')
     } catch (err) {
       setError(err instanceof Error ? err.message : '小助手请求失败')
       setStatus('小助手请求失败')
@@ -7196,7 +8185,19 @@ ${message}`
       ])
     } finally {
       setAssistantRunning(false)
+      setAssistantProgressLogs([])
     }
+  }
+
+  function handleAssistantInputKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
+    const isEnterKey =
+      event.key === 'Enter' || event.code === 'Enter' || event.code === 'NumpadEnter'
+    if (!isEnterKey || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return
+    const nativeEvent = event.nativeEvent as KeyboardEvent
+    if (nativeEvent.isComposing || (nativeEvent as { keyCode?: number }).keyCode === 229) return
+    event.preventDefault()
+    if (assistantSendDisabled) return
+    void sendAssistantMessage()
   }
 
   const handleEditorMount: OnMount = (editor, monaco) => {
@@ -7295,102 +8296,182 @@ ${message}`
 
             {hasDesktopProjectStorage ? (
               <div className="project-settings-panel">
-                <label className="project-settings-field">
-                  <span>{t('软件语言', 'Language')}</span>
-                  <select
-                    value={appLanguage}
-                    onChange={(event) => setAppLanguage(event.target.value as AppLanguage)}
-                  >
-                    <option value="zh-CN">中文</option>
-                    <option value="en-US">English</option>
-                  </select>
-                </label>
-                <label className="project-settings-field is-full">
-                  <span>{t('项目文件保存位置', 'Project Storage Directory')}</span>
-                  <div className="project-storage-row">
-                    <input
-                      value={projectStorageDir}
-                      onChange={(event) => setProjectStorageDir(event.target.value)}
-                      placeholder={t('输入本地目录路径', 'Enter local directory path')}
-                    />
-                    <button
-                      className="text-button project-storage-pick-button"
-                      onClick={() => void pickProjectStorageDir()}
-                      title={t('选择目录', 'Browse')}
-                      aria-label={t('选择目录', 'Browse')}
-                    >
-                      <svg
-                        className="project-storage-pick-icon"
-                        viewBox="0 0 24 24"
-                        aria-hidden="true"
-                        focusable="false"
+                <section className="project-settings-group is-wide">
+                  <header className="project-settings-group-header">
+                    <h3>{t('基础设置', 'Basic Settings')}</h3>
+                    <p>
+                      {t(
+                        '管理语言与项目存储路径。',
+                        'Configure language and project storage location.'
+                      )}
+                    </p>
+                  </header>
+                  <div className="project-settings-group-body">
+                    <label className="project-settings-field">
+                      <span>{t('软件语言', 'Language')}</span>
+                      <select
+                        value={appLanguage}
+                        onChange={(event) => setAppLanguage(event.target.value as AppLanguage)}
                       >
-                        <path d="M10 4l2 2h8v12H4V4h6z" />
-                        <path d="M4 9h16" />
-                      </svg>
-                    </button>
+                        <option value="zh-CN">中文</option>
+                        <option value="en-US">English</option>
+                      </select>
+                    </label>
+                    <label className="project-settings-field is-full">
+                      <span>{t('项目文件保存位置', 'Project Storage Directory')}</span>
+                      <div className="project-storage-row">
+                        <input
+                          value={projectStorageDir}
+                          onChange={(event) => setProjectStorageDir(event.target.value)}
+                          placeholder={t('输入本地目录路径', 'Enter local directory path')}
+                        />
+                        <button
+                          className="text-button project-storage-pick-button"
+                          onClick={() => void pickProjectStorageDir()}
+                          title={t('选择目录', 'Browse')}
+                          aria-label={t('选择目录', 'Browse')}
+                        >
+                          <svg
+                            className="project-storage-pick-icon"
+                            viewBox="0 0 24 24"
+                            aria-hidden="true"
+                            focusable="false"
+                          >
+                            <path d="M10 4l2 2h8v12H4V4h6z" />
+                            <path d="M4 9h16" />
+                          </svg>
+                        </button>
+                      </div>
+                    </label>
+                    <p className="panel-note-tip project-settings-note">
+                      {t(
+                        '修改保存位置后，会将当前所有项目文件包迁移到新目录。',
+                        'After changing the location, all existing project packages will be moved to the new directory.'
+                      )}
+                    </p>
                   </div>
-                </label>
-                <div className="project-settings-field">
-                  <span>{t('软件升级', 'Software Upgrade')}</span>
-                  <p className="project-settings-version">{appVersionLabel}</p>
-                  <p className="panel-note-tip project-settings-note-inline">
-                    {t(
-                      '当前版本说明：v 1.1 bate（内测版本）。',
-                      'Current version note: v 1.1 bate (beta).'
+                </section>
+
+                <section className="project-settings-group">
+                  <header className="project-settings-group-header">
+                    <h3>{t('版本与授权', 'Version & Activation')}</h3>
+                    <p>
+                      {t(
+                        '查看版本信息与本机授权状态。',
+                        'Check version and machine activation status.'
+                      )}
+                    </p>
+                  </header>
+                  <div className="project-settings-group-body">
+                    <div className="project-settings-field">
+                      <span>{t('软件升级', 'Software Upgrade')}</span>
+                      <p className="project-settings-version">
+                        <span>{appVersionLabel}</span>
+                        {hasActivationSupport && (
+                          <button
+                            className={`activation-chip ${activationStatus.activated ? 'is-active' : ''}`}
+                            onClick={() => void openActivationDialog()}
+                            title={activationTooltip}
+                            type="button"
+                          >
+                            {activationLabel}
+                          </button>
+                        )}
+                      </p>
+                      <p className="panel-note-tip project-settings-note-inline">
+                        {t(
+                          '当前版本说明：v 1.1 bate（内测版本）。',
+                          'Current version note: v 1.1 bate (beta).'
+                        )}
+                      </p>
+                      <button
+                        className="text-button project-upgrade-button"
+                        disabled={isCheckingAppUpgrade}
+                        onClick={() => void checkAppUpgrade()}
+                        type="button"
+                      >
+                        {isCheckingAppUpgrade ? t('检查中...', 'Checking...') : t('软件升级', 'Check Upgrade')}
+                      </button>
+                    </div>
+                    {hasActivationSupport && (
+                      <div className="project-activation-box">
+                        <div className="project-activation-row">
+                          <span>{t('当前计算机 MAC', 'Current MAC')}</span>
+                          <code>{currentMachineMacLabel}</code>
+                        </div>
+                        <div className="project-activation-row">
+                          <span>{t('已绑定 MAC', 'Bound MAC')}</span>
+                          <code>{boundMachineMacLabel}</code>
+                        </div>
+                        <div className="project-activation-actions">
+                          <button
+                            className="text-button danger"
+                            disabled={!canUnbindCurrentMachine || isUnbindingMachine}
+                            onClick={() => void unbindCurrentMachine()}
+                            type="button"
+                          >
+                            {isUnbindingMachine
+                              ? t('取消绑定中...', 'Unbinding...')
+                              : t('取消本机绑定', 'Unbind This Machine')}
+                          </button>
+                          {!canUnbindCurrentMachine && (
+                            <small>{t('当前未绑定，无需取消。', 'Not bound on this machine.')}</small>
+                          )}
+                        </div>
+                      </div>
                     )}
-                  </p>
+                  </div>
+                </section>
+
+                <section className="project-settings-group">
+                  <header className="project-settings-group-header">
+                    <h3>{t('启动选项', 'Startup Options')}</h3>
+                    <p>
+                      {t(
+                        '控制开机自动启动和自动升级行为。',
+                        'Control auto-launch and auto-upgrade behavior.'
+                      )}
+                    </p>
+                  </header>
+                  <div className="project-settings-group-body">
+                    <label className="project-settings-switch-card">
+                      <input
+                        checked={autoUpdateEnabled}
+                        onChange={(event) => setAutoUpdateEnabled(event.target.checked)}
+                        type="checkbox"
+                      />
+                      <span>{t('自动升级（默认开启）', 'Auto upgrade (enabled by default)')}</span>
+                    </label>
+                    <label className="project-settings-switch-card">
+                      <input
+                        checked={autoLaunchEnabled}
+                        onChange={(event) => setAutoLaunchEnabled(event.target.checked)}
+                        type="checkbox"
+                      />
+                      <span>{t('软件随系统启动（默认开启）', 'Launch on system startup (enabled by default)')}</span>
+                    </label>
+                  </div>
+                </section>
+
+                <section className="project-settings-actions is-wide">
                   <button
-                    className="text-button project-upgrade-button"
-                    disabled={isCheckingAppUpgrade}
-                    onClick={() => void checkAppUpgrade()}
-                    type="button"
+                    className="primary-button project-settings-save"
+                    disabled={isApplyingProjectSettings}
+                    onClick={() => void applyProjectSettings()}
                   >
-                    {isCheckingAppUpgrade ? t('检查中...', 'Checking...') : t('软件升级', 'Check Upgrade')}
+                    {isApplyingProjectSettings
+                      ? t('保存中...', 'Saving...')
+                      : t('保存设置', 'Save Settings')}
                   </button>
-                </div>
-                <div className="project-settings-field">
-                  <span>{t('启动选项', 'Startup Options')}</span>
-                  <label className="project-settings-switch">
-                    <input
-                      checked={autoUpdateEnabled}
-                      onChange={(event) => setAutoUpdateEnabled(event.target.checked)}
-                      type="checkbox"
-                    />
-                    <span>{t('自动升级（默认开启）', 'Auto upgrade (enabled by default)')}</span>
-                  </label>
-                  <label className="project-settings-switch">
-                    <input
-                      checked={autoLaunchEnabled}
-                      onChange={(event) => setAutoLaunchEnabled(event.target.checked)}
-                      type="checkbox"
-                    />
-                    <span>{t('软件随系统启动（默认开启）', 'Launch on system startup (enabled by default)')}</span>
-                  </label>
-                </div>
-                <p className="panel-note-tip project-settings-note project-settings-field is-full">
-                  {t(
-                    '修改保存位置后，会将当前所有项目文件包迁移到新目录。',
-                    'After changing the location, all existing project packages will be moved to the new directory.'
+                  {projectSettingsNotice && (
+                    <p
+                      className={`project-settings-notice ${projectSettingsNotice.kind === 'success' ? 'is-success' : 'is-error'}`}
+                      role="status"
+                    >
+                      {projectSettingsNotice.message}
+                    </p>
                   )}
-                </p>
-                <button
-                  className="primary-button project-settings-save project-settings-field is-full"
-                  disabled={isApplyingProjectSettings}
-                  onClick={() => void applyProjectSettings()}
-                >
-                  {isApplyingProjectSettings
-                    ? t('保存中...', 'Saving...')
-                    : t('保存设置', 'Save Settings')}
-                </button>
-                {projectSettingsNotice && (
-                  <p
-                    className={`project-settings-notice ${projectSettingsNotice.kind === 'success' ? 'is-success' : 'is-error'}`}
-                    role="status"
-                  >
-                    {projectSettingsNotice.message}
-                  </p>
-                )}
+                </section>
               </div>
             ) : (
               <p className="panel-note-tip project-settings-note">
@@ -7668,7 +8749,17 @@ ${message}`
                   <span>{t('让AI写作更可控', 'Make AI Writing More Controllable')}</span>
                 </div>
                 <div className="project-home-version" aria-label="Software version">
-                  v 1.1 bate
+                  <span>{appVersionLabel || APP_VERSION_FALLBACK}</span>
+                  {hasActivationSupport && (
+                    <button
+                      className={`activation-chip ${activationStatus.activated ? 'is-active' : ''}`}
+                      onClick={() => void openActivationDialog()}
+                      title={activationTooltip}
+                      type="button"
+                    >
+                      {activationLabel}
+                    </button>
+                  )}
                 </div>
               </div>
               <div className="project-home-header-actions">
@@ -8217,9 +9308,22 @@ ${message}`
         <header className="menu-bar">
           <div className="brand">
             <img className="brand-logo" src={appLogo} alt={APP_DISPLAY_NAME} />
-            <div>
+            <div className="brand-copy">
               <strong>{APP_DISPLAY_NAME}</strong>
               <span>{t('让AI写作更可控', 'Make AI Writing More Controllable')}</span>
+            </div>
+            <div className="brand-meta-row brand-meta-row-inline">
+              <span>{appVersionLabel || APP_VERSION_FALLBACK}</span>
+              {hasActivationSupport && (
+                <button
+                  className={`activation-chip is-compact ${activationStatus.activated ? 'is-active' : ''}`}
+                  onClick={() => void openActivationDialog()}
+                  title={activationTooltip}
+                  type="button"
+                >
+                  {activationLabel}
+                </button>
+              )}
             </div>
           </div>
           <div className="menu-project-name" title={activeProject?.name ?? ''}>
@@ -8405,11 +9509,8 @@ ${message}`
                     </div>
                   </div>
                 </div>
-                {writingMode === 'script' && (
-                  <span className="script-mode-tip">输入“角色名|”会自动同步到记忆库的角色模块</span>
-                )}
                 {activeVersion?.updatedAt ? (
-                  <span className="version-inline-time">路 {activeVersion.updatedAt}</span>
+                  <span className="version-inline-time">{`最后修改时间：${activeVersion.updatedAt}`}</span>
                 ) : null}
                 <small className="version-updated-at">
                   {`最后修改 ${activeVersion?.updatedAt ?? '--'}`}
@@ -8518,12 +9619,18 @@ ${message}`
             </div>
 
             <footer className="command-strip">
-              {isRunning ? (
-                <div className="command-strip-status">模型生成中，请稍后在输出面板查看....</div>
+              {isModelBusy ? (
+                <div className="command-strip-status">
+                  {assistantRunning
+                    ? '小助手思考中，请稍后再执行扩写/润色....'
+                    : connectionState === 'checking'
+                    ? '模型启动中，请稍后在输出面板查看....'
+                    : '模型生成中，请稍后在输出面板查看....'}
+                </div>
               ) : (
                 actions.map((action) => (
                   <button
-                    disabled={!canRunSelectionActions}
+                    disabled={!canRunSelectionActions || assistantRunning}
                     key={action.key}
                     onMouseDown={(event) => event.preventDefault()}
                     onClick={() => void runAction(action)}
@@ -8580,30 +9687,41 @@ ${message}`
                     ))
                   )}
                   {assistantRunning && (
-                    <div className="assistant-chat-bubble is-assistant">
+                    <div className="assistant-chat-bubble is-assistant is-thinking">
                       <p>正在思考...</p>
+                      {assistantProgressLogs.length > 0 ? (
+                        <ul className="assistant-thinking-steps">
+                          {assistantProgressLogs.map((line, index) => (
+                            <li key={`${index}-${line}`}>{line}</li>
+                          ))}
+                        </ul>
+                      ) : null}
                     </div>
                   )}
                 </div>
                 <div className="assistant-chat-input-row">
                   <textarea
-                    placeholder="例如：把闫君止的语气改得更冷一点，但不要改剧情走向。"
+                    placeholder="例如：把主角的语气改得更冷一点，但不要改剧情走向。"
                     value={assistantInput}
                     onChange={(event) => setAssistantInput(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' && !event.shiftKey) {
-                        event.preventDefault()
-                        void sendAssistantMessage()
-                      }
-                    }}
+                    onKeyDown={handleAssistantInputKeyDown}
                   />
                   <button
-                    className="primary-button assistant-chat-send"
-                    disabled={assistantRunning || !assistantInput.trim()}
+                    className={`primary-button assistant-chat-send${
+                      isModelUnavailable ? ' is-unavailable' : ''
+                    }`}
+                    disabled={assistantSendDisabled}
                     onClick={() => void sendAssistantMessage()}
                     type="button"
                   >
-                    发送
+                    {assistantSendLoading ? (
+                      <span className="assistant-chat-send-content">
+                        <span className="assistant-chat-send-spinner" aria-hidden="true" />
+                        <span>{assistantSendLabel}</span>
+                      </span>
+                    ) : (
+                      assistantSendLabel
+                    )}
                   </button>
                 </div>
               </div>
@@ -9692,6 +10810,9 @@ ${message}`
                       setIsBackupGraphPanning(false)
                       backupGraphPanStartRef.current = null
                       setDraggingBackupId(null)
+                      backupDragIdsRef.current = []
+                      backupDragOffsetsByIdRef.current = {}
+                      setBackupSelectionBox(null)
                       setBackupLinkStart(null)
                       setBackupLinkTarget(null)
                       setBackupLinkPreview(null)
@@ -9756,9 +10877,9 @@ ${message}`
                           DEFAULT_BACKUP_RELATION_LABEL_COLOR
                         )
                         const relationIsDirectFocus =
-                          selectedBackupId !== null &&
-                          (relation.fromBackupId === selectedBackupId ||
-                            relation.toBackupId === selectedBackupId)
+                          focusedBackupId !== null &&
+                          (relation.fromBackupId === focusedBackupId ||
+                            relation.toBackupId === focusedBackupId)
                         const relationHovered =
                           hoveredBackupRelationId === relation.id ||
                           draggingBackupRelationCurve?.relationId === relation.id
@@ -9836,6 +10957,17 @@ ${message}`
                           })()
                       ) : null}
                       </svg>
+                      {backupSelectionBounds && (
+                        <div
+                          className="backup-graph-selection-box"
+                          style={{
+                            left: backupSelectionBounds.minX,
+                            top: backupSelectionBounds.minY,
+                            width: backupSelectionBounds.width,
+                            height: backupSelectionBounds.height
+                          }}
+                        />
+                      )}
                       {filteredBackups.map((backup, index) => {
                         const position =
                           backupPositionById.get(backup.id) ?? getBackupNodePosition(backup, index)
@@ -9849,7 +10981,7 @@ ${message}`
                             : null
                         return (
                           <article
-                            className={`backup-graph-node ${draggingBackupId === backup.id ? 'dragging' : ''}${showHandles ? ' show-handles' : ''}${!isDirectBackupNode ? ' is-dimmed' : ''}`}
+                            className={`backup-graph-node ${draggingBackupId === backup.id ? 'dragging' : ''}${showHandles ? ' show-handles' : ''}${selectedBackupIds.has(backup.id) ? ' selected' : ''}${!isDirectBackupNode ? ' is-dimmed' : ''}`}
                             data-backup-id={backup.id}
                             key={backup.id}
                             onMouseDown={(event) => beginBackupDrag(event, backup.id)}
@@ -10140,18 +11272,24 @@ ${message}`
                           className="editor-context-item"
                           onClick={(event) => {
                             event.stopPropagation()
-                            deleteBackup(backupNodeMenu.backupId as number)
+                            const targetBackupId = backupNodeMenu.backupId as number
+                            const nextIds = selectedBackupIds.has(targetBackupId)
+                              ? Array.from(selectedBackupIds)
+                              : [targetBackupId]
+                            deleteBackups(nextIds)
                             setBackupNodeMenu({ open: false, x: 0, y: 0, backupId: null })
                           }}
                           type="button"
                         >
-                          删除事件
+                          {selectedBackupIds.size > 1 && selectedBackupIds.has(backupNodeMenu.backupId)
+                            ? `删除已选事件（${selectedBackupIds.size}）`
+                            : '删除事件'}
                         </button>
                       </div>
                     )}
                     {isBackupGraphBoardFullscreen ? (
                       <div className="backup-graph-help">
-                        滚轮缩放 · 中键或空格+拖动平移 · 拖拽四边连接点建立因果 · 双击事件/连线编辑 · 拖拽连线中点可弯曲
+                        滚轮缩放 · 中键或空格+拖动平移 · 拖拽框选多选 · Delete 删除事件 · 拖拽四边连接点建立因果 · 双击事件/连线编辑 · 拖拽连线中点可弯曲
                       </div>
                     ) : null}
                     {backupRelationEditorDialog && (
@@ -10412,6 +11550,23 @@ ${message}`
                         : '未读取到模型（可手动输入）'}
                     </small>
                   )}
+                  {config.kind === 'ollama' && hasActivationSupport && !activationStatus.activated && (
+                    <div className="settings-activation-warning">
+                      <span>
+                        {t(
+                          '当前未激活：本地模型不可用，仅可使用云端模型。',
+                          'Not activated: local models are unavailable. Cloud models only.'
+                        )}
+                      </span>
+                      <button
+                        className="text-button"
+                        onClick={() => void openActivationDialog()}
+                        type="button"
+                      >
+                        {isOpeningActivationDialog ? t('打开中...', 'Opening...') : t('立即激活', 'Activate Now')}
+                      </button>
+                    </div>
+                  )}
                 </label>
                 {config.kind === 'openai' && (
                   <label>
@@ -10455,6 +11610,72 @@ ${message}`
                     <span>{`当前模型连接：${connectionStatusLabel}`}</span>
                   </div>
                 </div>
+                <section className="settings-runtime-card">
+                  <header className="settings-runtime-card-header">
+                    <strong>Skills 生效诊断</strong>
+                    <small>
+                      {runtimeDiagnostics?.generatedAt
+                        ? `最近请求：${new Date(runtimeDiagnostics.generatedAt).toLocaleString('zh-CN', {
+                            hour12: false
+                          })}`
+                        : '尚未发送请求'}
+                    </small>
+                  </header>
+                  <div className="settings-runtime-status-row">
+                    <span
+                      className={`settings-runtime-pill ${runtimeSkillsLoaded ? 'is-on' : 'is-off'}`}
+                    >
+                      已加载
+                    </span>
+                    <span
+                      className={`settings-runtime-pill ${runtimeSkillsInjected ? 'is-on' : 'is-off'}`}
+                    >
+                      已注入
+                    </span>
+                    <span
+                      className={`settings-runtime-pill ${runtimeSkillsHit ? 'is-on' : 'is-off'}`}
+                    >
+                      已命中
+                    </span>
+                  </div>
+                  <p className="settings-runtime-tip">
+                    已加载：有可用 Skills；已注入：system 中包含 Skills；已命中：本次请求在带 Skills 的上下文中执行。
+                  </p>
+                  <div className="settings-runtime-hash-row">
+                    <small>
+                      Skills Hash：{runtimeDiagnostics?.skillsPromptHash || '暂无'}
+                    </small>
+                    <small>
+                      System Hash：{runtimeDiagnostics?.systemPromptHash || '暂无'}
+                    </small>
+                  </div>
+                  <div className="settings-runtime-preview">
+                    <div className="settings-runtime-preview-head">
+                      <span>注入预览（System）</span>
+                    </div>
+                    <textarea
+                      readOnly
+                      value={runtimeSystemPreview || '暂无注入预览。先执行一次“测试连接”或写作动作。'}
+                    />
+                  </div>
+                  <div className="settings-runtime-log">
+                    <div className="settings-runtime-log-head">最近请求日志</div>
+                    {visibleRuntimeLogs.length > 0 ? (
+                      <ul className="settings-runtime-log-list">
+                        {visibleRuntimeLogs.slice(0, 10).map((log) => (
+                          <li key={log.id}>
+                            <strong>{`${new Date(log.createdAt).toLocaleTimeString('zh-CN', {
+                              hour12: false
+                            })} · ${log.model}`}</strong>
+                            <small>{`${log.provider} · memory ${log.memoryCount} · input ${log.inputChars} chars · skills ${log.skillsInjected ? 'yes' : 'no'}`}</small>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="empty-tip">暂无请求日志。</p>
+                    )}
+                  </div>
+                </section>
                 <label>
                   <span>自定义动作</span>
                   <textarea
@@ -10523,6 +11744,7 @@ ${message}`
                           disabled={
                             isBuildingSkillModel ||
                             config.kind !== 'ollama' ||
+                            (hasActivationSupport && !activationStatus.activated) ||
                             !skillModelName.trim() ||
                             !skillsPrompt.trim()
                           }
@@ -10737,17 +11959,77 @@ ${message}`
                   placeholder="输出会显示在这里。"
                 />
                 <div className="result-actions result-actions-main">
-                  <button onClick={insertResult} disabled={!result}>
-                    插入到光标处
+                  <button
+                    className="result-action-btn"
+                    onClick={insertResult}
+                    disabled={!result}
+                    title="插入到光标处"
+                  >
+                    <span className="result-action-icon" aria-hidden>↧</span>
+                    <span className="result-action-label">插入</span>
                   </button>
-                  <button onClick={replaceSelection} disabled={!result}>
-                    替换选中内容
+                  <button
+                    className="result-action-btn"
+                    onClick={replaceSelection}
+                    disabled={!result}
+                    title="替换选中内容"
+                  >
+                    <span className="result-action-icon" aria-hidden>⇆</span>
+                    <span className="result-action-label">替换</span>
                   </button>
-                  <button onClick={addMemoryFromResult} disabled={!result}>
-                    保存到记忆
+                  <button
+                    className="result-action-btn"
+                    onClick={addMemoryFromResult}
+                    disabled={!result}
+                    title="保存到记忆"
+                  >
+                    <span className="result-action-icon" aria-hidden>◎</span>
+                    <span className="result-action-label">记忆</span>
                   </button>
-                  <button onClick={() => createBackup(result)} disabled={!result}>
-                    保存参考
+                  <button
+                    className="result-action-btn"
+                    onClick={() => createBackup(result)}
+                    disabled={!result}
+                    title="保存参考"
+                  >
+                    <span className="result-action-icon" aria-hidden>※</span>
+                    <span className="result-action-label">参考</span>
+                  </button>
+                  <button
+                    className="result-action-btn"
+                    onClick={() => void copyResultToClipboard()}
+                    disabled={!result}
+                    title="复制输出"
+                  >
+                    <span className="result-action-icon" aria-hidden>⧉</span>
+                    <span className="result-action-label">复制</span>
+                  </button>
+                  <button
+                    className="result-action-btn"
+                    onClick={appendResultToDraft}
+                    disabled={!result}
+                    title="追加到正文末尾"
+                  >
+                    <span className="result-action-icon" aria-hidden>＋</span>
+                    <span className="result-action-label">追加</span>
+                  </button>
+                  <button
+                    className="result-action-btn"
+                    onClick={overwriteDraftWithResult}
+                    disabled={!result}
+                    title="用输出覆盖正文"
+                  >
+                    <span className="result-action-icon" aria-hidden>▣</span>
+                    <span className="result-action-label">覆盖</span>
+                  </button>
+                  <button
+                    className="result-action-btn"
+                    onClick={clearResultOutput}
+                    disabled={!result}
+                    title="清空输出"
+                  >
+                    <span className="result-action-icon" aria-hidden>×</span>
+                    <span className="result-action-label">清空</span>
                   </button>
                 </div>
               </section>
@@ -10815,6 +12097,13 @@ ${message}`
           ref={editorContextMenuRef}
           style={{ left: editorContextMenu.x, top: editorContextMenu.y }}
         >
+          {editorContextModelStatusTip ? (
+            <div
+              className={`editor-context-status-tip is-${editorContextModelStatusState}`}
+            >
+              {editorContextModelStatusTip}
+            </div>
+          ) : null}
           {editorContextMenuItems.map((item) => {
             if ('divider' in item) {
               return <div className="editor-context-divider" key={item.key} />

@@ -14,6 +14,42 @@ type DesktopGeneratePayload = {
 type DesktopGenerateResult = {
   sessionId: string
   output: string
+  diagnostics?: {
+    generatedAt: string
+    skillsLoaded: boolean
+    skillsInjected: boolean
+    skillsHit: boolean
+    injectedThisRequest: boolean
+    skillsPromptHash: string
+    systemPromptHash: string
+    systemPromptPreview: string
+    latestRequest?: {
+      id: string
+      createdAt: string
+      provider: string
+      model: string
+      baseUrl: string
+      instructionChars: number
+      inputChars: number
+      memoryCount: number
+      skillsLoaded: boolean
+      skillsInjected: boolean
+      injectedThisRequest: boolean
+    }
+    requestLogs?: Array<{
+      id: string
+      createdAt: string
+      provider: string
+      model: string
+      baseUrl: string
+      instructionChars: number
+      inputChars: number
+      memoryCount: number
+      skillsLoaded: boolean
+      skillsInjected: boolean
+      injectedThisRequest: boolean
+    }>
+  }
 }
 
 type DesktopCreateModelPayload = {
@@ -33,6 +69,22 @@ type DesktopOllamaModelsResult = {
   models: string[]
   localModels?: string[]
   cloudModels?: string[]
+  reachable?: boolean
+  error?: string
+  activationRequiredForLocal?: boolean
+}
+
+type DesktopActivationStatus = {
+  activated: boolean
+  rawActivated?: boolean
+  email: string
+  activatedAt: string
+  currentMachineMac?: string
+  boundMachineMac?: string
+  machineBound?: boolean
+  mode: string
+  projectLimit: number
+  localModelAllowed: boolean
 }
 
 type DesktopSkillItem = {
@@ -94,6 +146,18 @@ interface NovelDesktopApi {
   createCustomSkill(payload: { name: string; content: string }): Promise<DesktopSkillsPayload>
   renameCustomSkill(payload: { id: string; name: string }): Promise<DesktopSkillsPayload>
   deleteCustomSkill(payload: { id: string }): Promise<DesktopSkillsPayload>
+  getActivationStatus(): Promise<{ ok?: boolean; status?: DesktopActivationStatus } | DesktopActivationStatus>
+  activateWithLicense(payload: {
+    email: string
+    activationCode: string
+  }): Promise<{ ok: boolean; status: DesktopActivationStatus }>
+  unbindCurrentMachine(): Promise<{ ok: boolean; status: DesktopActivationStatus }>
+  openActivationDialog(payload?: { reason?: string }): Promise<{
+    ok: boolean
+    canceled?: boolean
+    error?: string
+    status?: DesktopActivationStatus
+  }>
   getProjectSettings(): Promise<DesktopProjectSettings>
   updateProjectSettings(payload: {
     language?: 'zh-CN' | 'en-US'

@@ -35,6 +35,18 @@ contextBridge.exposeInMainWorld('novelDesktopApi', {
   deleteCustomSkill(payload) {
     return ipcRenderer.invoke('novel:skills-delete-custom', payload)
   },
+  getActivationStatus() {
+    return ipcRenderer.invoke('novel:activation-status')
+  },
+  activateWithLicense(payload) {
+    return ipcRenderer.invoke('novel:activation-activate', payload)
+  },
+  unbindCurrentMachine() {
+    return ipcRenderer.invoke('novel:activation-unbind')
+  },
+  openActivationDialog(payload) {
+    return ipcRenderer.invoke('novel:activation-open-dialog', payload)
+  },
   getProjectSettings() {
     return ipcRenderer.invoke('novel:project-settings-get')
   },
