@@ -74,6 +74,12 @@ type DesktopOllamaModelsResult = {
   activationRequiredForLocal?: boolean
 }
 
+type DesktopOpenAiModelsResult = {
+  models: string[]
+  reachable?: boolean
+  error?: string
+}
+
 type DesktopActivationStatus = {
   activated: boolean
   rawActivated?: boolean
@@ -139,6 +145,10 @@ interface NovelDesktopApi {
     baseUrl: string
     includeCloud?: boolean
   }): Promise<DesktopOllamaModelsResult>
+  listOpenAiModels(payload: {
+    baseUrl: string
+    apiKey?: string
+  }): Promise<DesktopOpenAiModelsResult>
   signinOllama(): Promise<{ ok: boolean }>
   listSkills(): Promise<DesktopSkillsPayload>
   installSkill(payload: { id: string; source: 'official' | 'custom' }): Promise<DesktopSkillsPayload>

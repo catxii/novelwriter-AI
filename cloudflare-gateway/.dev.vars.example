@@ -1,0 +1,5 @@
+DEEPSEEK_API_KEY=sk-xxxxxx
+JWT_SECRET=change-this-to-a-random-long-string
+ADMIN_TOKEN=change-this-admin-token
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+ALLOWED_ORIGINS=*

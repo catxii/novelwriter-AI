@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron')
+﻿const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron')
 const fs = require('fs/promises')
 const path = require('path')
 const { spawn } = require('child_process')
@@ -13,11 +13,16 @@ const OFFICIAL_SKILLS_DIR = 'E:\\novelwriter\\skills'
 const DEFAULT_LANGUAGE = 'zh-CN'
 const PROJECTS_DIR_BASENAME = 'NovelWriter Projects'
 const APP_VERSION_LABEL = 'v 1.1 bate'
-const APP_DISPLAY_NAME = '超级兔子AI写作'
-const APP_ICON_PATH = path.join(__dirname, '..', 'icon', 'logo.png')
+const APP_DISPLAY_NAME = '瓒呯骇鍏斿瓙AI鍐欎綔'
+const APP_ID = 'com.novelwriter.desktop'
+const APP_ICON_PATH =
+  process.platform === 'win32'
+    ? path.join(__dirname, '..', 'icon', 'icon.ico')
+    : path.join(__dirname, '..', 'icon', 'logo.png')
 const ACTIVATION_SECRET = 'novelwriter-offline-activation-v1'
 const ACTIVATION_CODE_PREFIX = 'NW'
 const ACTIVATION_FREE_PROJECT_LIMIT = 1
+const DEEPSEEK_OPENAI_BASE_URL = 'https://api.deepseek.com'
 
 let mainWindow = null
 let cachePath = ''
@@ -626,11 +631,11 @@ async function moveProjectStorageDirectory(nextDir) {
 function normalizeBaseUrl(baseUrl, provider) {
   const clean = String(baseUrl || '')
     .trim()
-    .replace(/[。．]/g, '.')
-    .replace(/：/g, ':')
-    .replace(/／/g, '/')
+    .replace(/[銆傦紟]/g, '.')
+    .replace(/[：﹕]/g, ':')
+    .replace(/[／∕]/g, '/')
     .replace(/\/+$/, '')
-  if (!clean) return provider === 'ollama' ? 'http://localhost:11434' : ''
+  if (!clean) return provider === 'ollama' ? 'http://localhost:11434' : DEEPSEEK_OPENAI_BASE_URL
   if (provider === 'ollama' && !/^[a-z][a-z0-9+.-]*:\/\//i.test(clean)) {
     return `http://${clean}`
   }
@@ -642,6 +647,27 @@ function buildOpenAiUrl(baseUrl) {
   if (clean.endsWith('/chat/completions')) return clean
   if (clean.endsWith('/v1')) return `${clean}/chat/completions`
   return `${clean}/v1/chat/completions`
+}
+
+function normalizeModelIdForRequest(provider, modelName) {
+  const raw = String(modelName || '').trim()
+  if (!raw) return ''
+  if (provider !== 'openai') return raw
+  return raw.replace(/\s*[锛?](鎺ㄨ崘|褰撳墠|recommended)[锛?]\s*$/gi, '').trim()
+}
+
+function normalizeApiKey(apiKey) {
+  return String(apiKey || '').trim()
+}
+
+function buildOpenAiModelsUrl(baseUrl) {
+  const clean = baseUrl.replace(/\/+$/, '')
+  if (clean.endsWith('/models')) return clean
+  if (clean.endsWith('/chat/completions')) {
+    return clean.replace(/\/chat\/completions$/i, '/models')
+  }
+  if (clean.endsWith('/v1')) return `${clean}/models`
+  return `${clean}/v1/models`
 }
 
 function hashText(input) {
@@ -757,19 +783,15 @@ function toReadableOllamaError(error, baseUrl) {
   const codes = collectErrorCodes(error)
   const hasRefused = codes.includes('ECONNREFUSED')
   const hasTimeout = codes.includes('ETIMEDOUT')
-  if (hasRefused) {
-    return `无法连接到 Ollama（${baseUrl}）。请先启动 Ollama 服务，再点击“立即连接”或“刷新模型”。`
-  }
-  if (hasTimeout) {
-    return `连接 Ollama 超时（${baseUrl}）。请检查本机网络、防火墙或 Ollama 服务状态。`
+  if (hasRefused || hasTimeout) {
+    return '找不到本地模型，请查看“模型板块”的“使用帮助”，并根据说明安装本地模型。'
   }
   const message =
     error instanceof Error ? error.message : typeof error === 'string' ? error : '未知错误'
   if (/fetch failed/i.test(String(message || ''))) {
-    const detail = codes.length > 0 ? `（${codes.join(', ')}）` : ''
-    return `请求 Ollama 失败（${baseUrl}）。请确认模型接口地址正确且 Ollama 已启动。${detail}`
+    return '找不到本地模型，请查看“模型板块”的“使用帮助”，并根据说明安装本地模型。'
   }
-  const detail = codes.length > 0 ? `（${codes.join(', ')}）` : ''
+  const detail = codes.length > 0 ? ` (${codes.join(', ')})` : ''
   return `请求 Ollama 失败：${String(message || '未知错误')}${detail}`
 }
 
@@ -1120,12 +1142,14 @@ function ensureSession(payload) {
 async function callModel(payload, session) {
   const provider = payload.provider
   const baseUrl = normalizeBaseUrl(payload.baseUrl, provider)
+  const requestModel = normalizeModelIdForRequest(provider, payload.model) || String(payload.model || '').trim()
+  const requestApiKey = normalizeApiKey(payload.apiKey)
   const messages = session.messages
 
   if (provider === 'ollama') {
     let primary = null
     try {
-      primary = await requestOllamaChat(baseUrl, payload.model, messages, payload.temperature)
+      primary = await requestOllamaChat(baseUrl, requestModel, messages, payload.temperature)
     } catch (error) {
       throw new Error(toReadableOllamaError(error, baseUrl))
     }
@@ -1135,10 +1159,10 @@ async function callModel(payload, session) {
     }
 
     const primaryError = String(primary.data?.error || primary.rawText || '').trim()
-    const canRetryCloud = !/-cloud(?::|$)/i.test(payload.model)
+    const canRetryCloud = !/-cloud(?::|$)/i.test(requestModel)
     const modelNotFound = /model\s+'.+?'\s+not\s+found/i.test(primaryError)
     if (canRetryCloud && modelNotFound) {
-      const cloudModel = toCloudModelName(payload.model)
+      const cloudModel = toCloudModelName(requestModel)
       let cloud = null
       try {
         cloud = await requestOllamaChat(baseUrl, cloudModel, messages, payload.temperature)
@@ -1160,18 +1184,35 @@ async function callModel(payload, session) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      ...(payload.apiKey ? { Authorization: `Bearer ${payload.apiKey}` } : {}),
+      ...(getCurrentMachineMacAddress() ? { 'x-client-mac': getCurrentMachineMacAddress() } : {}),
+      ...(requestApiKey ? { Authorization: `Bearer ${requestApiKey}` } : {}),
     },
     body: JSON.stringify({
-      model: payload.model,
+      model: requestModel,
       messages,
       temperature: payload.temperature,
     }),
   })
-  if (!response.ok) {
-    throw new Error(`API request failed: ${response.status}`)
+  const rawText = await response.text()
+  let data = null
+  try {
+    data = rawText ? JSON.parse(rawText) : null
+  } catch {
+    data = null
   }
-  const data = await response.json()
+  if (!response.ok) {
+    const detail =
+      (data &&
+        typeof data === 'object' &&
+        data.error &&
+        typeof data.error === 'object' &&
+        typeof data.error.message === 'string' &&
+        data.error.message.trim()) ||
+      String(rawText || '').trim().slice(0, 240)
+    throw new Error(
+      `API request failed: ${response.status}${detail ? `: ${detail}` : ''} (model=${requestModel})`
+    )
+  }
   if (data?.error?.message) throw new Error(data.error.message)
   return String(data?.choices?.[0]?.message?.content || '').trim()
 }
@@ -1319,6 +1360,26 @@ function parseOllamaModelNames(data) {
     .filter(Boolean)
 }
 
+function parseOpenAiModelNames(data) {
+  const directModels = Array.isArray(data?.data) ? data.data : []
+  const nestedModels =
+    !directModels.length && Array.isArray(data?.data?.list) ? data.data.list : []
+  const fallbackModels = Array.isArray(data?.models) ? data.models : []
+  const rawModels = directModels.length
+    ? directModels
+    : nestedModels.length
+      ? nestedModels
+      : fallbackModels
+  return rawModels
+    .map((item) => {
+      if (!item || typeof item !== 'object') return ''
+      const id = item.id
+      if (typeof id === 'string' && id.trim()) return id.trim()
+      return ''
+    })
+    .filter(Boolean)
+}
+
 function toCloudModelName(name) {
   const value = String(name || '').trim()
   if (!value) return ''
@@ -1411,6 +1472,63 @@ async function listOllamaModels(_event, payload) {
   }
 }
 
+async function listOpenAiModels(_event, payload) {
+  const baseUrl = normalizeBaseUrl(payload?.baseUrl, 'openai')
+  const apiKey = String(payload?.apiKey || '').trim()
+  if (!baseUrl) {
+    return {
+      models: [],
+      reachable: false,
+      error: '璇峰厛濉啓妯″瀷鎺ュ彛鍦板潃',
+    }
+  }
+
+  try {
+    const response = await fetch(buildOpenAiModelsUrl(baseUrl), {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        ...(getCurrentMachineMacAddress() ? { 'x-client-mac': getCurrentMachineMacAddress() } : {}),
+        ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+      },
+    })
+    const rawText = await response.text()
+    let data = {}
+    try {
+      data = rawText ? JSON.parse(rawText) : {}
+    } catch {
+      data = {}
+    }
+
+    if (!response.ok) {
+      const detail =
+        (data &&
+          typeof data === 'object' &&
+          data.error &&
+          typeof data.error === 'object' &&
+          typeof data.error.message === 'string' &&
+          data.error.message.trim()) ||
+        rawText.trim().slice(0, 180)
+      throw new Error(`妯″瀷鍒楄〃璇锋眰澶辫触锛?{response.status}${detail ? `锛?{detail}` : ''}`)
+    }
+
+    const models = [...new Set(parseOpenAiModelNames(data))].sort((a, b) =>
+      a.localeCompare(b, 'zh-CN')
+    )
+    return {
+      models,
+      reachable: true,
+      error: '',
+    }
+  } catch (error) {
+    return {
+      models: [],
+      reachable: false,
+      error: error instanceof Error ? error.message : '璇诲彇妯″瀷鍒楄〃澶辫触',
+    }
+  }
+}
+
 async function signinOllama() {
   try {
     const child = spawn('ollama', ['signin'], {
@@ -1423,7 +1541,7 @@ async function signinOllama() {
     return { ok: true }
   } catch (error) {
     throw new Error(
-      error instanceof Error ? `启动 ollama signin 失败：${error.message}` : '启动 ollama signin 失败'
+      error instanceof Error ? `鍚姩 ollama signin 澶辫触锛?{error.message}` : '鍚姩 ollama signin 澶辫触'
     )
   }
 }
@@ -1468,13 +1586,13 @@ async function checkAppUpgrade() {
     currentVersion: APP_VERSION_LABEL,
     latestVersion: APP_VERSION_LABEL,
     hasUpdate: false,
-    note: '当前已是最新版本。',
+    note: '当前已经是最新版本。',
   }
 }
 
 async function pickProjectStorageDir() {
   const result = await dialog.showOpenDialog(mainWindow, {
-    title: '选择项目保存目录',
+    title: '閫夋嫨椤圭洰淇濆瓨鐩綍',
     properties: ['openDirectory', 'createDirectory'],
     defaultPath: appSettings.projectsDir,
   })
@@ -1610,7 +1728,7 @@ async function readImportProjectPackage(sourceDir) {
 
 async function importProjectPackages() {
   const result = await dialog.showOpenDialog(mainWindow, {
-    title: '导入作品',
+    title: '瀵煎叆浣滃搧',
     properties: ['openDirectory', 'multiSelections'],
     defaultPath: appSettings.projectsDir,
   })
@@ -1700,6 +1818,7 @@ function registerIpc() {
   })
   ipcMain.handle('novel:create-skill-model', createSkillModel)
   ipcMain.handle('novel:ollama-models', listOllamaModels)
+  ipcMain.handle('novel:openai-models', listOpenAiModels)
   ipcMain.handle('novel:ollama-signin', signinOllama)
   ipcMain.handle('novel:skills-list', async () => getSkillsCenterPayload())
   ipcMain.handle('novel:skills-install', async (_event, payload) =>
@@ -1833,6 +1952,9 @@ function createWindow() {
 
 app.whenReady().then(async () => {
   app.setName(APP_DISPLAY_NAME)
+  if (process.platform === 'win32') {
+    app.setAppUserModelId(APP_ID)
+  }
   cachePath = path.join(app.getPath('userData'), 'session-cache.json')
   skillsStorePath = path.join(app.getPath('userData'), 'skills-center.json')
   appSettingsPath = path.join(app.getPath('userData'), 'app-settings.json')
@@ -1855,3 +1977,4 @@ app.whenReady().then(async () => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
+

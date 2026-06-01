@@ -1,7 +1,9 @@
 {
   "name": "novelwriter",
+  "version": "0.1.2",
+  "description": "超级兔子AI写作桌面端",
+  "author": "Super Rabbit",
   "private": true,
-  "version": "0.0.0",
   "main": "electron/main.cjs",
   "type": "module",
   "scripts": {
@@ -41,7 +43,9 @@
   },
   "build": {
     "appId": "com.novelwriter.desktop",
+    "executableName": "super-rabbit-ai-writer",
     "productName": "超级兔子Ai写作",
+    "executableName": "super-rabbit-ai-writer",
     "artifactName": "超级兔子Ai写作 V${version}.${ext}",
     "directories": {
       "output": "release"
@@ -49,11 +53,13 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
+      "icon/**/*",
       "package.json"
     ],
     "win": {
       "executableName": "super-rabbit-ai-writer",
-      "icon": "E:/novelwriter/icon/logo.ico",
+      "icon": "icon/logo.ico",
+      "signAndEditExecutable": true,
       "target": [
         {
           "target": "nsis",
@@ -66,11 +72,11 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "perMachine": true,
+      "perMachine": false,
       "include": "build/installer.nsh",
-      "installerIcon": "E:/novelwriter/icon/logo.ico",
-      "uninstallerIcon": "E:/novelwriter/icon/trash.ico",
-      "installerHeaderIcon": "E:/novelwriter/icon/logo.ico",
+      "installerIcon": "icon/logo.ico",
+      "uninstallerIcon": "icon/trash.ico",
+      "installerHeaderIcon": "icon/logo.ico",
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
     }

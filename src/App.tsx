@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
+﻿import { useEffect, useMemo, useRef, useState } from 'react'
 import MonacoEditor, { loader, type OnMount } from '@monaco-editor/react'
 import type {
   CSSProperties,
@@ -9,6 +9,18 @@ import type {
 import * as monacoApi from 'monaco-editor'
 import type * as Monaco from 'monaco-editor'
 import appLogo from '../icon/logo.png'
+import historyIcon from '../icon/history.png'
+import settingIcon from '../icon/setting.png'
+import moreIcon from '../icon/more.png'
+import questionIcon from '../icon/question.png'
+import emptyIcon from '../icon/empty.png'
+import appCenterIcon from '../icon/app.png'
+import okIcon from '../icon/ok.png'
+import renameIcon from '../icon/rename.png'
+import fileIcon from '../icon/file.png'
+import deleteIcon from '../icon/delete.png'
+import removeIcon from '../icon/remove.png'
+import uploadIcon from '../icon/upload.png'
 import aiBlotIcon from '../icon/ai-blot.png'
 import writingIcon from '../icon/写作.png'
 import createIcon from '../icon/新建.png'
@@ -17,6 +29,7 @@ import streakIcon from '../icon/连续创作.png'
 import worksIcon from '../icon/创作作品.png'
 import todayCharsIcon from '../icon/新闻写作.png'
 import homeBannerVideo from '../banner/banner1.mp4'
+import magicLoadingVideo from '../banner/magic-720.mp4'
 import titleBanner from '../banner/title-banner.png'
 import './App.css'
 
@@ -24,6 +37,7 @@ loader.config({ monaco: monacoApi })
 
 type ProviderKind = 'ollama' | 'openai'
 type ActivePanel = 'memory' | 'settings' | 'result' | 'backup' | 'skills'
+type ActiveScreen = 'projects' | 'writer' | 'issues' | 'skills-market'
 type ConnectionState = 'unknown' | 'checking' | 'connected' | 'failed'
 type AppLanguage = 'zh-CN' | 'en-US'
 type AssistantChatRole = 'user' | 'assistant'
@@ -65,6 +79,7 @@ type EditorContextMenuItem =
   | {
       key: string
       label: string
+      detail?: string
       shortcut?: string
       run: () => void | Promise<void>
       disabled: boolean
@@ -78,6 +93,9 @@ type EditorSelectionRange = {
 }
 
 type SkillSource = 'official' | 'custom'
+type SkillMarketCategory = 'general' | 'continue' | 'polish' | 'expand' | 'deai'
+type SkillSlotKey = 'modelInit' | 'continue' | 'polish' | 'expand' | 'deai'
+type SkillMarketSort = 'rating' | 'usage' | 'newest' | 'oldest'
 type SkillCatalogItem = {
   id: string
   key: string
@@ -89,6 +107,22 @@ type SkillCatalogItem = {
   canDelete: boolean
   updatedAt: string
   content: string
+}
+
+type SkillMarketItem = {
+  id: string
+  name: string
+  description: string
+  prompt: string
+  category: SkillMarketCategory
+  authorId: string
+  authorEmail: string
+  isPublic: boolean
+  createdAt: string
+  updatedAt: string
+  ratingByUser: Record<string, number>
+  favoriteUserIds: string[]
+  usageUserIds: string[]
 }
 
 type SkillsCenterPayload = {
@@ -315,15 +349,112 @@ type ActivationStatus = {
   localModelAllowed: boolean
 }
 
+type OnlineAccountSession = {
+  token: string
+  email: string
+  userId: string
+  apiKey: string
+  membershipExpiresAt: string
+  balanceLabel: string
+  quotaLabel?: string
+  memberTier?: MemberTier
+}
+
+type IssueVisibility = 'private' | 'public'
+type IssueRecord = {
+  id: string
+  userId: string
+  userEmail: string
+  title: string
+  content: string
+  images: string[]
+  visibility: IssueVisibility
+  status: string
+  createdAt: string
+  updatedAt: string
+  replyCount: number
+  lastReplyAt: string
+}
+
+type IssueComment = {
+  id: string
+  issueId: string
+  userId: string
+  userEmail: string
+  content: string
+  images: string[]
+  createdAt: string
+}
+
+type MemberTier = 'normal' | 'plus' | 'pro'
+type ModelGuideSelection = 'online' | 'local' | ''
+
 const STORAGE_KEY = 'novelwriter.workspace.v3'
 const LEGACY_KEYS = ['novelwriter.workspace.v2', 'novelwriter.workspace.v1']
 const PROJECT_INDEX_KEY = 'novelwriter.projects.v1'
 const PROJECT_DATA_PREFIX = 'novelwriter.project.v1.'
 const LAST_PROJECT_KEY = 'novelwriter.project.last.v1'
 const LAST_SCREEN_KEY = 'novelwriter.screen.last.v1'
+const ONLINE_ACCOUNT_SESSION_KEY = 'novelwriter.online.account.v1'
+const ONLINE_ACCOUNT_LAST_EMAIL_KEY = 'novelwriter.online.last-email.v1'
 const MODEL_CONNECTION_SIGNATURE_KEY = 'novelwriter.model.connection.signature.v1'
+const FIRST_MODEL_GUIDE_KEY = 'novelwriter.model.guide.v1'
+const SKILLS_MARKET_STORAGE_KEY = 'novelwriter.skills.market.v1'
+const SKILLS_SLOT_ASSIGNMENTS_KEY = 'novelwriter.skills.slots.v1'
+const SKILLS_MARKET_CATEGORY_OPTIONS: Array<{ key: SkillMarketCategory; label: string }> = [
+  { key: 'general', label: '通用Skills' },
+  { key: 'continue', label: '续写Skills' },
+  { key: 'polish', label: '润色Skills' },
+  { key: 'expand', label: '扩写Skills' },
+  { key: 'deai', label: '去Ai味Skills' }
+]
+const SKILLS_SLOT_CONFIG: Array<{
+  key: SkillSlotKey
+  title: string
+  description: string
+  category: SkillMarketCategory
+}> = [
+  {
+    key: 'modelInit',
+    title: '模型初始化Skills',
+    description: '对整个模型注入，会影响模型的主要写作风格。',
+    category: 'general'
+  },
+  {
+    key: 'continue',
+    title: '续写Skills',
+    description: '',
+    category: 'continue'
+  },
+  {
+    key: 'polish',
+    title: '润色Skills',
+    description: '',
+    category: 'polish'
+  },
+  {
+    key: 'expand',
+    title: '扩写Skills',
+    description: '',
+    category: 'expand'
+  },
+  {
+    key: 'deai',
+    title: '去Ai味Skills',
+    description: '用于降低AI痕迹，可叠加到续写/润色/扩写。',
+    category: 'deai'
+  }
+]
 const APP_DISPLAY_NAME = '超级兔子AI写作'
 const APP_VERSION_FALLBACK = 'v 1.1 bate'
+const ONLINE_GATEWAY_BASE_URL = 'https://novelwriter-scnet-gateway.liangyunlong.workers.dev'
+const ONLINE_OPENAI_BASE_URL = ONLINE_GATEWAY_BASE_URL
+const OLLAMA_DOWNLOAD_URL = 'https://ollama.com/download'
+const OPENAI_GENERAL_RECOMMENDED_MODELS = ['deepseek-v4-flash', 'deepseek-v4-pro'] as const
+const OPENAI_MODEL_LABELS: Record<string, string> = {
+  'deepseek-v4-flash': 'DeepSeek-V4-Flash',
+  'deepseek-v4-pro': 'DeepSeek-V4-Pro'
+}
 
 const actions: WriterAction[] = [
   {
@@ -403,6 +534,8 @@ const ROLE_NODE_WIDTH = 188
 const ROLE_NODE_HEIGHT = 94
 const BACKUP_NODE_WIDTH = 228
 const BACKUP_NODE_HEIGHT = 124
+const GRAPH_CANVAS_WIDTH = 2800
+const GRAPH_CANVAS_HEIGHT = 1800
 const ROLE_LINK_SIDES: RoleLinkSide[] = ['top', 'right', 'bottom', 'left']
 const DEFAULT_ROLE_RELATION_MODE: RoleRelationMode = 'solid-directed'
 const ROLE_RELATION_MIN_INTIMACY = -100
@@ -414,10 +547,10 @@ const ROLE_RELATION_MODE_OPTIONS: Array<{
   icon: string
   label: string
 }> = [
-  { mode: 'solid-directed', icon: '→', label: '单向实线' },
-  { mode: 'solid-bidirectional', icon: '↔', label: '双向实线' },
-  { mode: 'dashed-directed', icon: '⇢', label: '单向虚线' },
-  { mode: 'dashed-bidirectional', icon: '⇄', label: '双向虚线' }
+  { mode: 'solid-directed', icon: '->', label: '单向实线' },
+  { mode: 'solid-bidirectional', icon: '<->', label: '双向实线' },
+  { mode: 'dashed-directed', icon: '~>', label: '单向虚线' },
+  { mode: 'dashed-bidirectional', icon: '<~>', label: '双向虚线' }
 ]
 const DEFAULT_ROLE_RELATION_STROKE_COLOR = '#000000'
 const DEFAULT_BACKUP_RELATION_STROKE_COLOR = '#000000'
@@ -486,7 +619,7 @@ const SPECIAL_PAGE_OPTIONS: Array<{ type: SpecialPageType; label: string }> = [
 
 function normalizeBaseUrl(baseUrl: string, provider: ProviderKind) {
   const clean = baseUrl.trim().replace(/\/+$/, '')
-  if (!clean) return provider === 'ollama' ? 'http://localhost:11434' : ''
+  if (!clean) return provider === 'ollama' ? 'http://localhost:11434' : ONLINE_OPENAI_BASE_URL
   return clean
 }
 
@@ -540,6 +673,14 @@ function buildOpenAiUrl(baseUrl: string) {
   return `${clean}/v1/chat/completions`
 }
 
+function buildOpenAiModelsUrl(baseUrl: string) {
+  const clean = baseUrl.replace(/\/+$/, '')
+  if (clean.endsWith('/models')) return clean
+  if (clean.endsWith('/chat/completions')) return clean.replace(/\/chat\/completions$/i, '/models')
+  if (clean.endsWith('/v1')) return `${clean}/models`
+  return `${clean}/v1/models`
+}
+
 function defineEditorTheme(monaco: typeof Monaco) {
   monaco.editor.defineTheme(EDITOR_THEME_ID, {
     base: 'vs-dark',
@@ -573,6 +714,80 @@ function pickOllamaModelNames(data: unknown) {
     })
     .filter(Boolean)
   return [...new Set(names)].sort((a, b) => a.localeCompare(b, 'zh-CN'))
+}
+
+function pickOpenAiModelNames(data: unknown) {
+  if (!data || typeof data !== 'object') return []
+  const directItems = Array.isArray((data as { data?: unknown[] }).data)
+    ? (data as { data: unknown[] }).data
+    : []
+  const nestedItems =
+    !directItems.length &&
+    Array.isArray((data as { data?: { list?: unknown[] } }).data?.list)
+      ? (data as { data: { list: unknown[] } }).data.list
+      : []
+  const modelsItems = Array.isArray((data as { models?: unknown[] }).models)
+    ? (data as { models: unknown[] }).models
+    : []
+  const items = directItems.length ? directItems : nestedItems.length ? nestedItems : modelsItems
+  const names = items
+    .map((item) => {
+      if (!item || typeof item !== 'object') return ''
+      const id = (item as { id?: unknown }).id
+      if (typeof id === 'string' && id.trim()) return id.trim()
+      return ''
+    })
+    .filter(Boolean)
+  return [...new Set(names)].sort((a, b) => a.localeCompare(b, 'zh-CN'))
+}
+
+function getOpenAiRecommendedModels(_apiKey: string) {
+  return [...OPENAI_GENERAL_RECOMMENDED_MODELS]
+}
+
+function getDefaultOpenAiModel(_apiKey: string) {
+  return 'deepseek-v4-flash'
+}
+
+function isRecommendedOpenAiModel(name: string, apiKey: string) {
+  const lower = name.trim().toLowerCase()
+  return getOpenAiRecommendedModels(apiKey).some((item) => item.toLowerCase() === lower)
+}
+
+function normalizeModelIdForRequest(provider: ProviderKind, modelName: string) {
+  const raw = modelName.trim()
+  if (!raw) return ''
+  if (provider !== 'openai') return raw
+  const cleaned = raw.replace(/\s*[（(](推荐|当前|recommended)[）)]\s*$/gi, '').trim()
+  const lower = cleaned.toLowerCase()
+  if (lower === 'deepseek-v4-flash' || lower === 'deepseek-v4-pro') return lower
+  return cleaned
+}
+
+function getOpenAiModelDisplayName(name: string) {
+  const normalized = normalizeModelIdForRequest('openai', name).toLowerCase()
+  return OPENAI_MODEL_LABELS[normalized] || name
+}
+
+function getOpenAiModelDisplayLabel(name: string, apiKey: string) {
+  const displayName = getOpenAiModelDisplayName(name)
+  return isRecommendedOpenAiModel(name, apiKey) ? `${displayName}（推荐）` : displayName
+}
+
+function pickPreferredOpenAiModel(currentModel: string, models: string[], apiKey: string) {
+  const current = currentModel.trim()
+  if (current && models.includes(current)) return current
+  for (const preferred of getOpenAiRecommendedModels(apiKey)) {
+    const match = models.find((item) => item.toLowerCase() === preferred.toLowerCase())
+    if (match) return match
+  }
+  return models[0] ?? ''
+}
+
+function buildVisibleOpenAiModels(models: string[], apiKey: string) {
+  const normalized = [...new Set(models.map((item) => normalizeModelIdForRequest('openai', item)).filter(Boolean))]
+  if (normalized.length) return normalized
+  return [...getOpenAiRecommendedModels(apiKey)]
 }
 
 function pickPreferredOllamaModel(currentModel: string, models: string[]) {
@@ -904,11 +1119,11 @@ function getQuadraticBezierPoint(
 
 function getRoleStanceEmoji(stance: number) {
   const normalized = clampRoleStance(stance)
-  if (normalized <= 2) return '😃'
-  if (normalized <= 4) return '😊'
+  if (normalized <= 2) return '😡'
+  if (normalized <= 4) return '🙁'
   if (normalized <= 6) return '😐'
-  if (normalized <= 8) return '😡'
-  return '👿'
+  if (normalized <= 8) return '🙂'
+  return '🤝'
 }
 
 function buildRoleMemoryText(name: string, note: string) {
@@ -1862,6 +2077,201 @@ function touchProjectMeta(projectId: string, updatedAt: string) {
   return nextProjects
 }
 
+function loadOnlineAccountSession(): OnlineAccountSession | null {
+  try {
+    const raw = localStorage.getItem(ONLINE_ACCOUNT_SESSION_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as Partial<OnlineAccountSession>
+    if (!parsed || typeof parsed !== 'object') return null
+    if (!parsed.token || !parsed.email || !parsed.userId || !parsed.apiKey) return null
+    return {
+      token: String(parsed.token),
+      email: String(parsed.email),
+      userId: String(parsed.userId),
+      apiKey: String(parsed.apiKey),
+      membershipExpiresAt:
+        typeof parsed.membershipExpiresAt === 'string' ? parsed.membershipExpiresAt : '',
+      balanceLabel: typeof parsed.balanceLabel === 'string' ? parsed.balanceLabel : '--',
+      quotaLabel: typeof parsed.quotaLabel === 'string' ? parsed.quotaLabel : '--',
+      memberTier:
+        parsed.memberTier === 'plus' || parsed.memberTier === 'pro' || parsed.memberTier === 'normal'
+          ? parsed.memberTier
+          : 'normal'
+    }
+  } catch {
+    return null
+  }
+}
+
+function saveOnlineAccountSession(session: OnlineAccountSession | null) {
+  try {
+    if (!session) {
+      localStorage.removeItem(ONLINE_ACCOUNT_SESSION_KEY)
+      return
+    }
+    localStorage.setItem(ONLINE_ACCOUNT_SESSION_KEY, JSON.stringify(session))
+  } catch {
+    // ignore storage write errors
+  }
+}
+
+function loadOnlineAccountLastEmail(): string {
+  try {
+    return String(localStorage.getItem(ONLINE_ACCOUNT_LAST_EMAIL_KEY) || '').trim()
+  } catch {
+    return ''
+  }
+}
+
+function saveOnlineAccountLastEmail(email: string) {
+  const value = email.trim()
+  if (!value) return
+  try {
+    localStorage.setItem(ONLINE_ACCOUNT_LAST_EMAIL_KEY, value)
+  } catch {
+    // ignore storage write errors
+  }
+}
+
+function loadModelGuideSelection(): ModelGuideSelection {
+  const raw = localStorage.getItem(FIRST_MODEL_GUIDE_KEY)
+  if (raw === 'online' || raw === 'local') return raw
+  return ''
+}
+
+function saveModelGuideSelection(selection: ModelGuideSelection) {
+  if (!selection) {
+    localStorage.removeItem(FIRST_MODEL_GUIDE_KEY)
+    return
+  }
+  localStorage.setItem(FIRST_MODEL_GUIDE_KEY, selection)
+}
+
+function createSkillMarketId() {
+  return `skill-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+}
+
+function normalizeSkillMarketItem(raw: Partial<SkillMarketItem>, index: number): SkillMarketItem {
+  const fallbackTime = nowLabel()
+  return {
+    id: typeof raw.id === 'string' && raw.id.trim() ? raw.id : `${createSkillMarketId()}-${index}`,
+    name: typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim() : `Skills ${index + 1}`,
+    description:
+      typeof raw.description === 'string' && raw.description.trim()
+        ? raw.description.trim()
+        : '',
+    prompt: typeof raw.prompt === 'string' ? raw.prompt : '',
+    category:
+      raw.category === 'general' ||
+      raw.category === 'continue' ||
+      raw.category === 'polish' ||
+      raw.category === 'expand' ||
+      raw.category === 'deai'
+        ? raw.category
+        : 'general',
+    authorId: typeof raw.authorId === 'string' ? raw.authorId : 'system',
+    authorEmail: typeof raw.authorEmail === 'string' ? raw.authorEmail : 'system@local',
+    isPublic: raw.isPublic !== false,
+    createdAt: typeof raw.createdAt === 'string' && raw.createdAt.trim() ? raw.createdAt : fallbackTime,
+    updatedAt: typeof raw.updatedAt === 'string' && raw.updatedAt.trim() ? raw.updatedAt : fallbackTime,
+    ratingByUser:
+      raw.ratingByUser && typeof raw.ratingByUser === 'object'
+        ? Object.fromEntries(
+            Object.entries(raw.ratingByUser).filter(
+              ([userId, value]) =>
+                Boolean(userId) && Number.isFinite(Number(value)) && Number(value) >= 1 && Number(value) <= 5
+            )
+          )
+        : {},
+    favoriteUserIds: Array.isArray(raw.favoriteUserIds)
+      ? [
+          ...new Set(
+            raw.favoriteUserIds.filter(
+              (item): item is string => typeof item === 'string' && item.trim().length > 0
+            )
+          )
+        ]
+      : [],
+    usageUserIds: Array.isArray(raw.usageUserIds)
+      ? [
+          ...new Set(
+            raw.usageUserIds.filter(
+              (item): item is string => typeof item === 'string' && item.trim().length > 0
+            )
+          )
+        ]
+      : []
+  }
+}
+
+function getSkillMarketDisplayDescription(skill: SkillMarketItem): string {
+  const custom = typeof skill.description === 'string' ? skill.description.trim() : ''
+  if (custom) return custom
+  const promptLine = String(skill.prompt || '')
+    .split(/\r?\n/)
+    .map((line) =>
+      line
+        .trim()
+        .replace(/^[-*>\d.、\s#]+/, '')
+        .trim()
+    )
+    .find((line) => line.length > 0)
+  if (promptLine) return promptLine.slice(0, 120)
+  return '暂无描述'
+}
+
+function loadSkillMarketCatalog(): SkillMarketItem[] {
+  try {
+    const raw = localStorage.getItem(SKILLS_MARKET_STORAGE_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.map((item, index) => normalizeSkillMarketItem(item as Partial<SkillMarketItem>, index))
+  } catch {
+    return []
+  }
+}
+
+function saveSkillMarketCatalog(items: SkillMarketItem[]) {
+  try {
+    localStorage.setItem(SKILLS_MARKET_STORAGE_KEY, JSON.stringify(items))
+  } catch {
+    // ignore storage write errors
+  }
+}
+
+function loadSkillSlotAssignments(): Record<SkillSlotKey, string> {
+  const defaults: Record<SkillSlotKey, string> = {
+    modelInit: '',
+    continue: '',
+    polish: '',
+    expand: '',
+    deai: ''
+  }
+  try {
+    const raw = localStorage.getItem(SKILLS_SLOT_ASSIGNMENTS_KEY)
+    if (!raw) return defaults
+    const parsed = JSON.parse(raw) as Partial<Record<SkillSlotKey, string>>
+    return {
+      modelInit: typeof parsed.modelInit === 'string' ? parsed.modelInit : '',
+      continue: typeof parsed.continue === 'string' ? parsed.continue : '',
+      polish: typeof parsed.polish === 'string' ? parsed.polish : '',
+      expand: typeof parsed.expand === 'string' ? parsed.expand : '',
+      deai: typeof parsed.deai === 'string' ? parsed.deai : ''
+    }
+  } catch {
+    return defaults
+  }
+}
+
+function saveSkillSlotAssignments(assignments: Record<SkillSlotKey, string>) {
+  try {
+    localStorage.setItem(SKILLS_SLOT_ASSIGNMENTS_KEY, JSON.stringify(assignments))
+  } catch {
+    // ignore storage write errors
+  }
+}
+
 function App() {
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null)
   const monacoRef = useRef<typeof Monaco | null>(null)
@@ -1872,7 +2282,6 @@ function App() {
   const scriptDecorationFrameRef = useRef<number | null>(null)
   const trackedScriptRoleNamesRef = useRef<Set<string>>(new Set())
   const editorContextMenuRef = useRef<HTMLDivElement | null>(null)
-  const customSkillUploadRef = useRef<HTMLInputElement | null>(null)
   const versionTabsViewportRef = useRef<HTMLDivElement | null>(null)
   const versionMeasureRefs = useRef<Record<number, HTMLSpanElement | null>>({})
   const overflowMenuRef = useRef<HTMLDivElement | null>(null)
@@ -1889,10 +2298,43 @@ function App() {
   const [activeProjectId, setActiveProjectId] = useState<string>(
     () => localStorage.getItem(LAST_PROJECT_KEY) ?? ''
   )
-  const [activeScreen, setActiveScreen] = useState<'projects' | 'writer'>(() =>
+  const [activeScreen, setActiveScreen] = useState<ActiveScreen>(() =>
     localStorage.getItem(LAST_SCREEN_KEY) === 'writer' ? 'writer' : 'projects'
   )
   const [projectCenterView, setProjectCenterView] = useState<'home' | 'settings' | 'all'>('home')
+  const [onlineAccountSession, setOnlineAccountSession] = useState<OnlineAccountSession | null>(() =>
+    loadOnlineAccountSession()
+  )
+  const [onlineAccountEmail, setOnlineAccountEmail] = useState(() => loadOnlineAccountLastEmail())
+  const [onlineAccountPassword, setOnlineAccountPassword] = useState('')
+  const [isOnlineAccountLoading, setIsOnlineAccountLoading] = useState(false)
+  const [isOnlineAuthModalOpen, setIsOnlineAuthModalOpen] = useState(false)
+  const [isPasswordResetModalOpen, setIsPasswordResetModalOpen] = useState(false)
+  const [isPasswordResetLoading, setIsPasswordResetLoading] = useState(false)
+  const [resetPasswordValue, setResetPasswordValue] = useState('')
+  const [isMembershipModalOpen, setIsMembershipModalOpen] = useState(false)
+  const [isMembershipApplying, setIsMembershipApplying] = useState(false)
+  const [membershipRedeemCode, setMembershipRedeemCode] = useState('')
+  const [isOpenAiModelPickerOpen, setIsOpenAiModelPickerOpen] = useState(false)
+  const [pendingOpenAiModel, setPendingOpenAiModel] = useState('')
+  const [onlineAuthMode, setOnlineAuthMode] = useState<'login' | 'register'>('login')
+  const [onlineAccountNotice, setOnlineAccountNotice] = useState('')
+  const [onlineAuthSuccessMessage, setOnlineAuthSuccessMessage] = useState('')
+  const [isOnlineAuthSuccessModalOpen, setIsOnlineAuthSuccessModalOpen] = useState(false)
+  const [issues, setIssues] = useState<IssueRecord[]>([])
+  const [issuesError, setIssuesError] = useState('')
+  const [isIssuesLoading, setIsIssuesLoading] = useState(false)
+  const [selectedIssueId, setSelectedIssueId] = useState('')
+  const [selectedIssue, setSelectedIssue] = useState<IssueRecord | null>(null)
+  const [issueComments, setIssueComments] = useState<IssueComment[]>([])
+  const [isIssueDetailLoading, setIsIssueDetailLoading] = useState(false)
+  const [issueFormTitle, setIssueFormTitle] = useState('')
+  const [issueFormContent, setIssueFormContent] = useState('')
+  const [issueFormImages, setIssueFormImages] = useState<string[]>([])
+  const [issueReplyContent, setIssueReplyContent] = useState('')
+  const [issueReplyImages, setIssueReplyImages] = useState<string[]>([])
+  const [isSubmittingIssue, setIsSubmittingIssue] = useState(false)
+  const [isSubmittingIssueReply, setIsSubmittingIssueReply] = useState(false)
   const [newProjectName, setNewProjectName] = useState('')
   const [appLanguage, setAppLanguage] = useState<AppLanguage>('zh-CN')
   const [projectStorageDir, setProjectStorageDir] = useState('')
@@ -1957,12 +2399,34 @@ function App() {
   const [sessionMap, setSessionMap] = useState<Record<string, string>>(
     initialWorkspace.sessionMap
   )
+  const [skillMarketCatalog, setSkillMarketCatalog] = useState<SkillMarketItem[]>(() =>
+    loadSkillMarketCatalog()
+  )
+  const [skillSlotAssignments, setSkillSlotAssignments] = useState<Record<SkillSlotKey, string>>(() =>
+    loadSkillSlotAssignments()
+  )
+  const [skillMarketCategoryFilter, setSkillMarketCategoryFilter] = useState<SkillMarketCategory | 'all'>('all')
+  const [skillMarketSort, setSkillMarketSort] = useState<SkillMarketSort>('rating')
+  const [skillMarketViewTab, setSkillMarketViewTab] = useState<'market' | 'my'>('market')
+  const [skillMarketSearch, setSkillMarketSearch] = useState('')
+  const [selectedSkillMarketId, setSelectedSkillMarketId] = useState('')
+  const [newSkillName, setNewSkillName] = useState('')
+  const [newSkillDescription, setNewSkillDescription] = useState('')
+  const [newSkillPrompt, setNewSkillPrompt] = useState('')
+  const [newSkillCategory, setNewSkillCategory] = useState<SkillMarketCategory>('general')
+  const [newSkillIsPublic, setNewSkillIsPublic] = useState(true)
+  const [isSubmittingNewSkill, setIsSubmittingNewSkill] = useState(false)
+  const skillPromptUploadInputRef = useRef<HTMLInputElement | null>(null)
+  const [skillSlotPickerSlotKey, setSkillSlotPickerSlotKey] = useState<SkillSlotKey | null>(null)
+  const [showSkillsDiagnosticsPanel, setShowSkillsDiagnosticsPanel] = useState(false)
   const [skillModelName, setSkillModelName] = useState(initialWorkspace.skillModelName)
   const [ollamaModels, setOllamaModels] = useState<string[]>([])
   const [localOllamaModels, setLocalOllamaModels] = useState<string[]>([])
   const [cloudOllamaModels, setCloudOllamaModels] = useState<string[]>([])
+  const [openAiModels, setOpenAiModels] = useState<string[]>([])
   const [loadCloudModels, setLoadCloudModels] = useState(false)
   const [isLoadingOllamaModels, setIsLoadingOllamaModels] = useState(false)
+  const [isLoadingOpenAiModels, setIsLoadingOpenAiModels] = useState(false)
   const [result, setResult] = useState('')
   const [status, setStatus] = useState('就绪')
   const [connectionState, setConnectionState] = useState<ConnectionState>('unknown')
@@ -1977,7 +2441,6 @@ function App() {
   const [draggingChapterId, setDraggingChapterId] = useState<number | null>(null)
   const [dragOverChapterId, setDragOverChapterId] = useState<number | null>(null)
   const [dragInsertPosition, setDragInsertPosition] = useState<ChapterDropPosition>('before')
-  const [isBuildingSkillModel, setIsBuildingSkillModel] = useState(false)
   const [visibleVersionIds, setVisibleVersionIds] = useState<number[]>([])
   const [overflowVersionIds, setOverflowVersionIds] = useState<number[]>([])
   const [isOverflowMenuOpen, setIsOverflowMenuOpen] = useState(false)
@@ -1988,13 +2451,9 @@ function App() {
     y: 0
   })
   const [skillCatalog, setSkillCatalog] = useState<SkillCatalogItem[]>([])
-  const [officialSkillsDir, setOfficialSkillsDir] = useState('E:\\novelwriter\\skills')
-  const [isSkillsCenterBusy, setIsSkillsCenterBusy] = useState(false)
-  const [editingSkillId, setEditingSkillId] = useState<string | null>(null)
-  const [editingSkillName, setEditingSkillName] = useState('')
   const [memorySearchQuery, setMemorySearchQuery] = useState('')
   const [memoryModule, setMemoryModule] = useState<MemoryKind>('info')
-  const [roleGraphView, setRoleGraphView] = useState<RoleGraphView>('list')
+  const [roleGraphView, setRoleGraphView] = useState<RoleGraphView>('graph')
   const [isRoleGraphFullscreen, setIsRoleGraphFullscreen] = useState(false)
   const [isRoleGraphVisualDialogOpen, setIsRoleGraphVisualDialogOpen] = useState(false)
   const [roleGraphViewport, setRoleGraphViewport] = useState({
@@ -2077,7 +2536,7 @@ function App() {
     relationId: null
   })
   const [backupSearchQuery, setBackupSearchQuery] = useState('')
-  const [backupGraphView, setBackupGraphView] = useState<BackupGraphView>('list')
+  const [backupGraphView, setBackupGraphView] = useState<BackupGraphView>('graph')
   const [isBackupGraphFullscreen, setIsBackupGraphFullscreen] = useState(false)
   const [isBackupGraphVisualDialogOpen, setIsBackupGraphVisualDialogOpen] = useState(false)
   const [backupGraphViewport, setBackupGraphViewport] = useState({
@@ -2154,12 +2613,19 @@ function App() {
     title: string
     content: string
   } | null>(null)
-  const [isAdvancedSettingsOpen, setIsAdvancedSettingsOpen] = useState(false)
+  const [memoryEditorDialog, setMemoryEditorDialog] = useState<{
+    memoryId: number
+    chapterTitle: string
+    versionTitle: string
+    text: string
+  } | null>(null)
   const [isVersionHistoryOpen, setIsVersionHistoryOpen] = useState(false)
   const [selectedHistoryId, setSelectedHistoryId] = useState<number | null>(null)
   const [assistantOpen, setAssistantOpen] = useState(false)
   const [assistantInput, setAssistantInput] = useState('')
   const [assistantMessages, setAssistantMessages] = useState<AssistantChatMessage[]>([])
+  const [assistantOpenAiModel, setAssistantOpenAiModel] = useState('')
+  const [assistantOllamaModel, setAssistantOllamaModel] = useState('')
   const [assistantRunning, setAssistantRunning] = useState(false)
   const [assistantProgressLogs, setAssistantProgressLogs] = useState<string[]>([])
   const [assistantDialogPos, setAssistantDialogPos] = useState({ x: 24, y: 24 })
@@ -2171,6 +2637,13 @@ function App() {
   } | null>(null)
   const [scriptRolePicker, setScriptRolePicker] = useState<ScriptRolePickerState | null>(null)
   const [isWorkspaceBootstrapping, setIsWorkspaceBootstrapping] = useState(true)
+  const [modelGuideSelection, setModelGuideSelection] = useState<ModelGuideSelection>(() =>
+    loadModelGuideSelection()
+  )
+  const [hasPromptedModelGuideThisEntry, setHasPromptedModelGuideThisEntry] = useState(false)
+  const [isModelGuideOpen, setIsModelGuideOpen] = useState(false)
+  const [modelGuideStep, setModelGuideStep] = useState<1 | 2>(1)
+  const [modelGuideDraftSelection, setModelGuideDraftSelection] = useState<ModelGuideSelection>('')
   const roleGraphBoardRef = useRef<HTMLDivElement | null>(null)
   const backupGraphBoardRef = useRef<HTMLDivElement | null>(null)
   const roleGraphPanStartRef = useRef<{
@@ -2240,6 +2713,43 @@ function App() {
       : connectionState === 'failed'
         ? 'is-failed'
         : 'is-idle'
+  const onlineTabLoggedIn = Boolean(
+    onlineAccountSession?.token.trim() && onlineAccountSession?.apiKey.trim()
+  )
+  const onlineTabTier: MemberTier = onlineAccountSession?.memberTier ?? 'normal'
+  const onlineTabExpireMs = onlineAccountSession?.membershipExpiresAt
+    ? new Date(onlineAccountSession.membershipExpiresAt).getTime()
+    : Number.NaN
+  const onlineTabMembershipExpired =
+    onlineTabTier !== 'normal' &&
+    Number.isFinite(onlineTabExpireMs) &&
+    onlineTabExpireMs < Date.now()
+  const onlineTabHasPaidMembership =
+    (onlineTabTier === 'plus' || onlineTabTier === 'pro') && !onlineTabMembershipExpired
+  const onlineTabQuotaLabel = String(onlineAccountSession?.quotaLabel || '').trim()
+  const onlineTabQuotaDisplay =
+    onlineTabHasPaidMembership &&
+    (!onlineTabQuotaLabel || onlineTabQuotaLabel === '--' || /待同步|pending/i.test(onlineTabQuotaLabel))
+      ? '100%'
+      : onlineTabQuotaLabel
+  const onlineTabQuotaMatch = onlineTabQuotaDisplay.match(/(\d+(?:\.\d+)?)\s*%/)
+  const onlineTabQuotaPercent = onlineTabQuotaMatch ? Number(onlineTabQuotaMatch[1]) : Number.NaN
+  const onlineTabHasQuota = onlineTabHasPaidMembership
+    ? !Number.isFinite(onlineTabQuotaPercent) || onlineTabQuotaPercent > 0
+    : Number.isFinite(onlineTabQuotaPercent) && onlineTabQuotaPercent > 0
+  const onlineTabHealthy = onlineTabLoggedIn && onlineTabHasPaidMembership && onlineTabHasQuota
+  const modelTabStatusClass =
+    config.kind === 'openai'
+      ? onlineTabHealthy
+        ? 'is-running'
+        : 'is-error'
+      : connectionState === 'connected'
+        ? 'is-running'
+        : connectionState === 'failed'
+          ? 'is-error'
+          : connectionState === 'checking'
+            ? 'is-starting'
+            : 'is-idle'
   const isConnecting = connectionState === 'checking'
   const connectionActionLabel =
     connectionState === 'connected'
@@ -2253,8 +2763,93 @@ function App() {
   const runtimeSystemPreview = runtimeDiagnostics?.systemPromptPreview ?? ''
   const visibleRuntimeLogs =
     runtimeRequestLogs.length > 0 ? runtimeRequestLogs : (runtimeDiagnostics?.requestLogs ?? [])
-  const currentSessionKey =
-    activeChapter && activeVersion ? `${activeChapter.id}:${activeVersion.id}` : ''
+  const currentSkillMarketUserId = onlineAccountSession?.userId?.trim() || ''
+  const currentSkillMarketUserEmail = onlineAccountSession?.email?.trim() || ''
+  const normalizedSkillMarketSearch = skillMarketSearch.trim().toLowerCase()
+  const skillMarketCategoryLabelByKey = useMemo(
+    () =>
+      Object.fromEntries(
+        SKILLS_MARKET_CATEGORY_OPTIONS.map((item) => [item.key, item.label])
+      ) as Record<SkillMarketCategory, string>,
+    []
+  )
+  const selectedSkillBySlot = useMemo(() => {
+    const byId = new Map(skillMarketCatalog.map((item) => [item.id, item]))
+    return {
+      modelInit: byId.get(skillSlotAssignments.modelInit) ?? null,
+      continue: byId.get(skillSlotAssignments.continue) ?? null,
+      polish: byId.get(skillSlotAssignments.polish) ?? null,
+      expand: byId.get(skillSlotAssignments.expand) ?? null,
+      deai: byId.get(skillSlotAssignments.deai) ?? null
+    }
+  }, [skillMarketCatalog, skillSlotAssignments])
+  const visibleSkillMarketItems = useMemo(() => {
+    const includePrivateMine = currentSkillMarketUserId
+    const source = skillMarketCatalog.filter((item) => {
+      if (skillMarketCategoryFilter !== 'all' && item.category !== skillMarketCategoryFilter) return false
+      if (!item.isPublic && item.authorId !== includePrivateMine) return false
+      if (!normalizedSkillMarketSearch) return true
+      const haystack =
+        `${item.name} ${getSkillMarketDisplayDescription(item)} ${item.authorEmail}`.toLowerCase()
+      return haystack.includes(normalizedSkillMarketSearch)
+    })
+    const sorted = [...source]
+    sorted.sort((a, b) => {
+      const aRatings = Object.values(a.ratingByUser).map((value) => Number(value)).filter((value) => Number.isFinite(value))
+      const bRatings = Object.values(b.ratingByUser).map((value) => Number(value)).filter((value) => Number.isFinite(value))
+      const aAvg = aRatings.length ? aRatings.reduce((sum, value) => sum + value, 0) / aRatings.length : 0
+      const bAvg = bRatings.length ? bRatings.reduce((sum, value) => sum + value, 0) / bRatings.length : 0
+      if (skillMarketSort === 'rating') return bAvg - aAvg || b.usageUserIds.length - a.usageUserIds.length
+      if (skillMarketSort === 'usage') return b.usageUserIds.length - a.usageUserIds.length || bAvg - aAvg
+      const aTime = new Date(a.createdAt).getTime()
+      const bTime = new Date(b.createdAt).getTime()
+      return skillMarketSort === 'oldest' ? aTime - bTime : bTime - aTime
+    })
+    return sorted
+  }, [
+    currentSkillMarketUserId,
+    normalizedSkillMarketSearch,
+    skillMarketCatalog,
+    skillMarketCategoryFilter,
+    skillMarketSort
+  ])
+  const mySkillMarketItems = useMemo(
+    () =>
+      currentSkillMarketUserId
+        ? skillMarketCatalog.filter((item) => item.authorId === currentSkillMarketUserId)
+        : [],
+    [currentSkillMarketUserId, skillMarketCatalog]
+  )
+  const selectedSkillMarketItem = useMemo(() => {
+    if (!selectedSkillMarketId) return null
+    return skillMarketCatalog.find((item) => item.id === selectedSkillMarketId) ?? null
+  }, [selectedSkillMarketId, skillMarketCatalog])
+  const skillSlotPickerConfig = useMemo(
+    () => SKILLS_SLOT_CONFIG.find((item) => item.key === skillSlotPickerSlotKey) ?? null,
+    [skillSlotPickerSlotKey]
+  )
+  const skillSlotPickerItems = useMemo(() => {
+    if (!skillSlotPickerConfig) return []
+    const includePrivateMine = currentSkillMarketUserId
+    const source = skillMarketCatalog.filter((item) => {
+      if (item.category !== skillSlotPickerConfig.category) return false
+      if (!item.isPublic && item.authorId !== includePrivateMine) return false
+      return true
+    })
+    const sorted = [...source]
+    sorted.sort((a, b) => {
+      const aRatings = Object.values(a.ratingByUser)
+        .map((value) => Number(value))
+        .filter((value) => Number.isFinite(value))
+      const bRatings = Object.values(b.ratingByUser)
+        .map((value) => Number(value))
+        .filter((value) => Number.isFinite(value))
+      const aAvg = aRatings.length ? aRatings.reduce((sum, value) => sum + value, 0) / aRatings.length : 0
+      const bAvg = bRatings.length ? bRatings.reduce((sum, value) => sum + value, 0) / bRatings.length : 0
+      return bAvg - aAvg || b.usageUserIds.length - a.usageUserIds.length
+    })
+    return sorted
+  }, [currentSkillMarketUserId, skillMarketCatalog, skillSlotPickerConfig])
 
   useEffect(() => {
     roleRelationsRef.current = roleRelations
@@ -2262,7 +2857,6 @@ function App() {
   useEffect(() => {
     backupRelationsRef.current = backupRelations
   }, [backupRelations])
-  const currentSessionId = currentSessionKey ? (sessionMap[currentSessionKey] ?? '') : ''
   const chapterVersions = activeChapter?.versions ?? EMPTY_VERSIONS
   const deleteProjectExpectedName = pendingDeleteProject?.name.trim() ?? ''
   const deleteProjectConfirmInput = deleteProjectConfirmName.trim()
@@ -2323,36 +2917,6 @@ function App() {
     )
   }, [assistantMessages, activeChapter, activeVersion, isWorkspaceBootstrapping])
   const isOverflowMenuVisible = isOverflowMenuOpen && overflowVersions.length > 0
-  const installedSkillsCount = useMemo(
-    () => skillCatalog.filter((skill) => skill.installed).length,
-    [skillCatalog]
-  )
-  const installedSkillCatalog = useMemo(
-    () =>
-      skillCatalog
-        .filter((skill) => skill.installed)
-        .sort((a, b) => {
-          if (a.source !== b.source) return a.source === 'official' ? -1 : 1
-          return a.name.localeCompare(b.name, 'zh-CN')
-        }),
-    [skillCatalog]
-  )
-  const officialSkillCatalog = useMemo(
-    () => skillCatalog.filter((skill) => skill.source === 'official'),
-    [skillCatalog]
-  )
-  const customSkillCatalog = useMemo(
-    () => skillCatalog.filter((skill) => skill.source === 'custom'),
-    [skillCatalog]
-  )
-  const availableOfficialSkillCatalog = useMemo(
-    () => officialSkillCatalog.filter((skill) => !skill.installed),
-    [officialSkillCatalog]
-  )
-  const availableCustomSkillCatalog = useMemo(
-    () => customSkillCatalog.filter((skill) => !skill.installed),
-    [customSkillCatalog]
-  )
   const filteredMemory = useMemo(() => {
     const keyword = memorySearchQuery.trim().toLowerCase()
     const scoped = memory.filter((item) => item.kind === memoryModule)
@@ -2517,6 +3081,8 @@ function App() {
     '--role-graph-grid-offset-x': `${roleGraphGridOffsetX}px`,
     '--role-graph-grid-offset-y': `${roleGraphGridOffsetY}px`,
     '--role-graph-bg-color': roleGraphVisual.backgroundColor,
+    '--role-graph-canvas-width': `${GRAPH_CANVAS_WIDTH}px`,
+    '--role-graph-canvas-height': `${GRAPH_CANVAS_HEIGHT}px`,
     '--role-graph-font-size': `${roleGraphVisual.fontSize}px`,
     '--role-graph-dim-opacity': `${roleGraphVisual.dimmedOpacity}`
   } as CSSProperties
@@ -2610,6 +3176,8 @@ function App() {
     '--backup-graph-grid-offset-x': `${backupGraphGridOffsetX}px`,
     '--backup-graph-grid-offset-y': `${backupGraphGridOffsetY}px`,
     '--backup-graph-bg-color': backupGraphVisual.backgroundColor,
+    '--backup-graph-canvas-width': `${GRAPH_CANVAS_WIDTH}px`,
+    '--backup-graph-canvas-height': `${GRAPH_CANVAS_HEIGHT}px`,
     '--backup-graph-font-size': `${backupGraphVisual.fontSize}px`,
     '--backup-graph-dim-opacity': `${backupGraphVisual.dimmedOpacity}`
   } as CSSProperties
@@ -2653,22 +3221,50 @@ function App() {
     return clampRoleStance(typeof item.roleStance === 'number' ? item.roleStance : 5)
   }
 
-  function getRoleNodePosition(item: MemoryItem, index: number) {
-    const defaultX = 28 + (index % 2) * 236
-    const defaultY = 28 + Math.floor(index / 2) * 132
+  function clampRoleNodePosition(x: number, y: number) {
     return {
-      x: Number.isFinite(item.roleX as number) ? (item.roleX as number) : defaultX,
-      y: Number.isFinite(item.roleY as number) ? (item.roleY as number) : defaultY
+      x: clampNumber(x, 0, GRAPH_CANVAS_WIDTH - ROLE_NODE_WIDTH),
+      y: clampNumber(y, 0, GRAPH_CANVAS_HEIGHT - ROLE_NODE_HEIGHT)
     }
   }
 
-  function getBackupNodePosition(item: BackupItem, index: number) {
-    const defaultX = 28 + (index % 2) * 276
-    const defaultY = 28 + Math.floor(index / 2) * 170
+  function clampBackupNodePosition(x: number, y: number) {
     return {
-      x: Number.isFinite(item.backupX as number) ? (item.backupX as number) : defaultX,
-      y: Number.isFinite(item.backupY as number) ? (item.backupY as number) : defaultY
+      x: clampNumber(x, 0, GRAPH_CANVAS_WIDTH - BACKUP_NODE_WIDTH),
+      y: clampNumber(y, 0, GRAPH_CANVAS_HEIGHT - BACKUP_NODE_HEIGHT)
     }
+  }
+
+  function getRoleNodeDefaultPosition() {
+    return clampRoleNodePosition(
+      (GRAPH_CANVAS_WIDTH - ROLE_NODE_WIDTH) / 2,
+      (GRAPH_CANVAS_HEIGHT - ROLE_NODE_HEIGHT) / 2
+    )
+  }
+
+  function getBackupNodeDefaultPosition() {
+    return clampBackupNodePosition(
+      (GRAPH_CANVAS_WIDTH - BACKUP_NODE_WIDTH) / 2,
+      (GRAPH_CANVAS_HEIGHT - BACKUP_NODE_HEIGHT) / 2
+    )
+  }
+
+  function getRoleNodePosition(item: MemoryItem, _index: number) {
+    const defaultPosition = getRoleNodeDefaultPosition()
+    const rawX = Number.isFinite(item.roleX as number) ? (item.roleX as number) : defaultPosition.x
+    const rawY = Number.isFinite(item.roleY as number) ? (item.roleY as number) : defaultPosition.y
+    return clampRoleNodePosition(rawX, rawY)
+  }
+
+  function getBackupNodePosition(item: BackupItem, _index: number) {
+    const defaultPosition = getBackupNodeDefaultPosition()
+    const rawX = Number.isFinite(item.backupX as number)
+      ? (item.backupX as number)
+      : defaultPosition.x
+    const rawY = Number.isFinite(item.backupY as number)
+      ? (item.backupY as number)
+      : defaultPosition.y
+    return clampBackupNodePosition(rawX, rawY)
   }
 
   function getRoleGraphPointFromClient(clientX: number, clientY: number) {
@@ -3092,7 +3688,7 @@ function App() {
     setAssistantProgressLogs([])
     setMemorySearchQuery('')
     setMemoryModule('info')
-    setRoleGraphView('list')
+    setRoleGraphView('graph')
     setIsRoleGraphVisualDialogOpen(false)
     setRoleGraphViewport({ x: 0, y: 0, scale: 1 })
     setIsRoleGraphSpacePressed(false)
@@ -3115,7 +3711,7 @@ function App() {
     setRoleRelationMenu({ open: false, x: 0, y: 0, relationId: null })
     setActiveRoleRelationMode(DEFAULT_ROLE_RELATION_MODE)
     setActiveRoleRelationStrokeColor(DEFAULT_ROLE_RELATION_STROKE_COLOR)
-    setBackupGraphView('list')
+    setBackupGraphView('graph')
     setIsBackupGraphVisualDialogOpen(false)
     setBackupActiveRelationMode(DEFAULT_ROLE_RELATION_MODE)
     setBackupActiveRelationStrokeColor(DEFAULT_BACKUP_RELATION_STROKE_COLOR)
@@ -3141,7 +3737,6 @@ function App() {
     setIsBackupGraphSpacePressed(false)
     setIsBackupGraphPanning(false)
     backupGraphPanStartRef.current = null
-    setIsAdvancedSettingsOpen(false)
   }
 
   function persistWorkspaceWithRoleRelations(nextRoleRelations: RoleRelation[]) {
@@ -3628,7 +4223,8 @@ function App() {
     void syncProjectsIndexToDisk(nextProjects)
     void syncProjectPackageToDisk(projectId, nextName, nextWorkspace)
     closeCreateProjectModal()
-    openProject(projectId, nextWorkspace)
+    setProjectCenterView('home')
+    setActiveScreen('projects')
     setStatus(`已创建项目：${nextName}`)
   }
 
@@ -3710,6 +4306,14 @@ function App() {
   }
 
   async function closeDesktopWindow() {
+    if (activeScreen !== 'projects') {
+      openProjectCenter()
+      return
+    }
+    if (projectCenterView !== 'home') {
+      setProjectCenterView('home')
+      return
+    }
     if (!window.novelDesktopApi?.closeWindow) return
     try {
       await window.novelDesktopApi.closeWindow()
@@ -3827,8 +4431,9 @@ function App() {
 
   useEffect(() => {
     if (!window.novelDesktopApi?.applyWindowScreenMode) return
+    const desktopScreenMode = activeScreen === 'projects' ? 'projects' : 'writer'
     void window.novelDesktopApi
-      .applyWindowScreenMode({ screen: activeScreen })
+      .applyWindowScreenMode({ screen: desktopScreenMode })
       .then((response) => {
         if (response?.ok) {
           setIsWindowMaximized(Boolean(response.isMaximized))
@@ -3852,9 +4457,15 @@ function App() {
   useEffect(() => {
     if (!projectActionMenuId) return
 
-    const onPointerDown = (event: MouseEvent) => {
-      const target = event.target
-      if (target instanceof HTMLElement && target.closest('.project-item-menu')) return
+    const onPointerDown = (event: PointerEvent) => {
+      const path = typeof event.composedPath === 'function' ? event.composedPath() : []
+      const hitMenu = path.some((node) => {
+        if (!(node instanceof Element)) return false
+        return Boolean(node.closest('.project-item-menu') || node.closest('.project-item-menu-dropdown'))
+      })
+      if (hitMenu) {
+        return
+      }
       setProjectActionMenuId(null)
     }
     const onKeyDown = (event: KeyboardEvent) => {
@@ -3864,13 +4475,25 @@ function App() {
       }
     }
 
-    window.addEventListener('mousedown', onPointerDown)
+    window.addEventListener('pointerdown', onPointerDown, true)
     window.addEventListener('keydown', onKeyDown, true)
     return () => {
-      window.removeEventListener('mousedown', onPointerDown)
+      window.removeEventListener('pointerdown', onPointerDown, true)
       window.removeEventListener('keydown', onKeyDown, true)
     }
   }, [projectActionMenuId])
+
+  function closeProjectActionMenu() {
+    setProjectActionMenuId(null)
+  }
+
+  function toggleProjectActionMenu(projectId: string) {
+    if (projectActionMenuId === projectId) {
+      closeProjectActionMenu()
+      return
+    }
+    setProjectActionMenuId(projectId)
+  }
 
   useEffect(() => {
     if (projects.length > 0 || !legacyWorkspace) return
@@ -4182,6 +4805,38 @@ function App() {
   useEffect(() => {
     localStorage.setItem(LAST_SCREEN_KEY, activeScreen)
   }, [activeScreen])
+
+  useEffect(() => {
+    if (activeScreen === 'writer') return
+    setHasPromptedModelGuideThisEntry(false)
+  }, [activeScreen])
+
+  useEffect(() => {
+    if (activeScreen !== 'issues') return
+    if (!onlineAccountSession?.token.trim()) return
+    void fetchIssues()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeScreen, onlineAccountSession?.token])
+
+  useEffect(() => {
+    if (isWorkspaceBootstrapping) return
+    if (activeScreen !== 'writer') return
+    if (!activeProjectId) return
+    if (modelGuideSelection) return
+    if (hasPromptedModelGuideThisEntry) return
+    if (isModelGuideOpen) return
+    setHasPromptedModelGuideThisEntry(true)
+    setModelGuideStep(1)
+    setModelGuideDraftSelection('')
+    setIsModelGuideOpen(true)
+  }, [
+    activeScreen,
+    activeProjectId,
+    hasPromptedModelGuideThisEntry,
+    isModelGuideOpen,
+    isWorkspaceBootstrapping,
+    modelGuideSelection
+  ])
 
   useEffect(() => {
     if (activeScreen !== 'writer') return
@@ -4615,20 +5270,66 @@ function App() {
     }
   }, [])
 
+  useEffect(() => {
+    saveSkillMarketCatalog(skillMarketCatalog)
+  }, [skillMarketCatalog])
+
+  useEffect(() => {
+    saveSkillSlotAssignments(skillSlotAssignments)
+  }, [skillSlotAssignments])
+
+  useEffect(() => {
+    const nextPrompt = buildModelInitSkillsPrompt()
+    setSkillsPrompt((previous) => (previous === nextPrompt ? previous : nextPrompt))
+  }, [skillMarketCatalog, skillSlotAssignments])
+
+  useEffect(() => {
+    if (skillMarketCatalog.length > 0) return
+    if (!skillCatalog.length) return
+    const seeded = skillCatalog.map((skill, index) =>
+      normalizeSkillMarketItem(
+        {
+          id: `seed-${skill.id || index}`,
+          name: skill.name || `Skills ${index + 1}`,
+          description: skill.source === 'official' ? '官方 Skills' : '自定义 Skills',
+          prompt: skill.content || '',
+          category: 'general',
+          authorId: skill.source === 'official' ? 'official' : 'system',
+          authorEmail: skill.source === 'official' ? 'official@novelwriter' : 'system@local',
+          isPublic: true,
+          createdAt: skill.updatedAt || nowLabel(),
+          updatedAt: skill.updatedAt || nowLabel()
+        },
+        index
+      )
+    )
+    setSkillMarketCatalog(seeded)
+  }, [skillCatalog, skillMarketCatalog.length])
+
+  useEffect(() => {
+    if (selectedSkillMarketId && skillMarketCatalog.some((item) => item.id === selectedSkillMarketId)) return
+    if (visibleSkillMarketItems.length > 0) {
+      setSelectedSkillMarketId(visibleSkillMarketItems[0].id)
+    } else {
+      setSelectedSkillMarketId('')
+    }
+  }, [selectedSkillMarketId, skillMarketCatalog, visibleSkillMarketItems])
+
   const counts = useMemo(() => {
     const compact = currentDraft.replace(/\s/g, '')
     return {
       chars: compact.length,
-      lines: lineCount(currentDraft),
-      versions: activeChapter?.versions.length ?? 0,
-      memories: memory.length,
-      backups: backups.length
+      lines: lineCount(currentDraft)
     }
-  }, [currentDraft, activeChapter, memory, backups])
+  }, [currentDraft])
+  const selectedSnippetCharsWithoutPunctuation = useMemo(() => {
+    return selectedSnippet.replace(/[\p{P}\p{S}\s]+/gu, '').length
+  }, [selectedSnippet])
+  const showSelectedSnippetCount = selectedSnippet.trim().length > 0
 
   const canRunSelectionActions =
     hasSelection || selectedSnippet.trim().length > 0
-  const isModelBusy = isRunning || assistantRunning
+  const isModelBusy = isRunning
   const isModelUnavailable = connectionState === 'checking' || connectionState === 'failed'
   const assistantSendDisabled =
     assistantRunning || isModelUnavailable || !assistantInput.trim()
@@ -4682,7 +5383,6 @@ function App() {
     )
   }, [scriptRolePickerCurrentRoleMemory, scriptRolePickerRoleDraft])
   const canDeleteChapter = chapters.length > 1
-  const hasSkillsCenter = Boolean(window.novelDesktopApi?.listSkills)
   const hasDesktopOllamaSignin = Boolean(window.novelDesktopApi?.signinOllama)
   const hasDesktopProjectStorage = Boolean(
     window.novelDesktopApi?.getProjectSettings && window.novelDesktopApi?.openProjectPackage
@@ -4691,6 +5391,118 @@ function App() {
   const hasDesktopWindowClose = Boolean(window.novelDesktopApi?.closeWindow)
   const hasDesktopWindowControls = Boolean(window.novelDesktopApi?.isDesktop)
   const hasActivationSupport = Boolean(window.novelDesktopApi?.getActivationStatus)
+  const isOnlineAiLoggedIn = Boolean(
+    onlineAccountSession?.token.trim() && onlineAccountSession?.apiKey.trim()
+  )
+  const onlineMemberTier: MemberTier = onlineAccountSession?.memberTier ?? 'normal'
+  const onlineMembershipExpireMs = onlineAccountSession?.membershipExpiresAt
+    ? new Date(onlineAccountSession.membershipExpiresAt).getTime()
+    : NaN
+  const isMembershipExpired =
+    onlineMemberTier !== 'normal' &&
+    Number.isFinite(onlineMembershipExpireMs) &&
+    onlineMembershipExpireMs < Date.now()
+  const hasPaidMembership = (onlineMemberTier === 'plus' || onlineMemberTier === 'pro') && !isMembershipExpired
+  const activeMembershipTier: MemberTier = hasPaidMembership ? onlineMemberTier : 'normal'
+  const activeMembershipTierRank = activeMembershipTier === 'pro' ? 2 : activeMembershipTier === 'plus' ? 1 : 0
+  const onlineMemberTierLabel =
+    onlineMemberTier === 'pro' ? 'Pro 会员' : onlineMemberTier === 'plus' ? 'Plus 会员' : '普通会员'
+  const onlineWelcomeMemberSuffix =
+    activeMembershipTier === 'pro'
+      ? '，尊贵的 Pro会员'
+      : activeMembershipTier === 'plus'
+        ? '，尊贵的 Plus会员'
+        : ''
+  const onlineMembershipExpiresLabel =
+    onlineMemberTier === 'normal'
+      ? t('未开通或未同步', 'Unavailable')
+      : isMembershipExpired
+        ? t('已到期', 'Expired')
+        : onlineAccountSession?.membershipExpiresAt
+          ? new Date(onlineAccountSession.membershipExpiresAt).toLocaleString('zh-CN')
+          : t('未开通或未同步', 'Unavailable')
+  const onlineBalanceLabel = onlineAccountSession?.balanceLabel?.trim()
+    ? onlineAccountSession.balanceLabel
+    : '--'
+  const onlineQuotaLabel = onlineAccountSession?.quotaLabel?.trim()
+    ? onlineAccountSession.quotaLabel
+    : '--'
+  const onlineBalanceDisplay =
+    hasPaidMembership && (onlineBalanceLabel === '--' || /待同步|pending/i.test(onlineBalanceLabel))
+      ? '100%'
+      : onlineBalanceLabel
+  const onlineQuotaDisplay =
+    hasPaidMembership && (onlineQuotaLabel === '--' || /待同步|pending/i.test(onlineQuotaLabel))
+      ? '100%'
+      : onlineQuotaLabel
+  const quotaMatch = onlineQuotaDisplay.match(/(\d+(?:\.\d+)?)\s*%/)
+  const quotaPercentRaw = quotaMatch ? Number(quotaMatch[1]) : NaN
+  const onlineQuotaPercent = Number.isFinite(quotaPercentRaw)
+    ? clampNumber(quotaPercentRaw, 0, 100)
+    : hasPaidMembership
+      ? 100
+      : 0
+  const showOnlineQuotaBar = hasPaidMembership || Boolean(quotaMatch)
+  const membershipUpgradeButtonLabel =
+    onlineMemberTier === 'plus'
+      ? '升级为Pro'
+      : onlineMemberTier === 'pro'
+        ? '续费'
+        : '升级为会员'
+  const isBlockedAccountNotice = /禁用|封禁|联系客服|blocked|forbidden/i.test(onlineAccountNotice)
+
+  const openAiBlockedByMembership = config.kind === 'openai' && isOnlineAiLoggedIn && !hasPaidMembership
+  const openAiModelRecommendationKey = (onlineAccountSession?.apiKey || config.apiKey || '').trim()
+  const currentOpenAiModel = config.model.trim() || getDefaultOpenAiModel(openAiModelRecommendationKey)
+  const openAiOptionalModels = useMemo(() => {
+    const preferred = openAiModels.length ? openAiModels : getOpenAiRecommendedModels(openAiModelRecommendationKey)
+    const normalized = [...new Set(preferred.map((item) => item.trim()).filter(Boolean))]
+    const current = currentOpenAiModel
+    if (current && !normalized.some((item) => item.toLowerCase() === current.toLowerCase())) {
+      normalized.unshift(current)
+    }
+    return normalized.map((name) => ({
+      name,
+      isRecommended: isRecommendedOpenAiModel(name, openAiModelRecommendationKey)
+    }))
+  }, [openAiModels, openAiModelRecommendationKey, currentOpenAiModel])
+  const assistantOpenAiModelOptions = useMemo(() => {
+    const unique = [...new Set(openAiOptionalModels.map((item) => item.name.trim()).filter(Boolean))]
+    const selected = assistantOpenAiModel.trim()
+    if (selected && !unique.some((item) => item.toLowerCase() === selected.toLowerCase())) {
+      unique.unshift(selected)
+    }
+    return unique.map((name) => ({
+      value: name,
+      label: getOpenAiModelDisplayLabel(name, openAiModelRecommendationKey)
+    }))
+  }, [assistantOpenAiModel, openAiOptionalModels, openAiModelRecommendationKey])
+  const assistantOllamaModelOptions = useMemo(() => {
+    const unique = [...new Set(ollamaModels.map((item) => item.trim()).filter(Boolean))]
+    const currentModel = config.model.trim()
+    const selected = assistantOllamaModel.trim()
+    if (currentModel && !unique.some((item) => item.toLowerCase() === currentModel.toLowerCase())) {
+      unique.unshift(currentModel)
+    }
+    if (selected && !unique.some((item) => item.toLowerCase() === selected.toLowerCase())) {
+      unique.unshift(selected)
+    }
+    return unique.map((name) => ({
+      value: name,
+      label: name
+    }))
+  }, [assistantOllamaModel, config.model, ollamaModels])
+  const assistantSelectedModel =
+    config.kind === 'openai'
+      ? assistantOpenAiModel.trim() || currentOpenAiModel
+      : assistantOllamaModel.trim() || config.model.trim()
+  const assistantModelOptions =
+    config.kind === 'openai' ? assistantOpenAiModelOptions : assistantOllamaModelOptions
+  const normalizedCurrentOpenAiModel = normalizeModelIdForRequest('openai', currentOpenAiModel)
+  const normalizedPendingOpenAiModel = normalizeModelIdForRequest(
+    'openai',
+    pendingOpenAiModel || currentOpenAiModel
+  )
   const activationLabel = activationStatus.activated
     ? t('已激活', 'Activated')
     : t('未激活', 'Not Activated')
@@ -4722,6 +5534,60 @@ function App() {
             ? '下午好，创作者'
             : '晚上好，创作者'
   const recentProjects = projects.slice(0, 5)
+  function renderProjectActionMenu(project: ProjectMeta) {
+    if (projectActionMenuId !== project.id) return null
+    return (
+      <div
+        className="project-item-menu-dropdown project-item-menu-inline-dropdown"
+        onPointerDown={(event) => event.stopPropagation()}
+        onMouseDown={(event) => event.stopPropagation()}
+        role="menu"
+      >
+        <button
+          className="project-menu-item"
+          disabled={renamingProjectId === project.id}
+          onClick={() => {
+            closeProjectActionMenu()
+            requestRenameProject(project)
+          }}
+          type="button"
+        >
+          <span className="project-menu-item-icon" aria-hidden>
+            <img className="project-menu-item-icon-img" src={renameIcon} alt="" />
+          </span>
+          <span>{renamingProjectId === project.id ? t('重命名中...', 'Renaming...') : t('重命名', 'Rename')}</span>
+        </button>
+        <button
+          className="project-menu-item"
+          disabled={!hasDesktopProjectStorage}
+          onClick={() => {
+            closeProjectActionMenu()
+            void openProjectFiles(project)
+          }}
+          type="button"
+        >
+          <span className="project-menu-item-icon" aria-hidden>
+            <img className="project-menu-item-icon-img" src={fileIcon} alt="" />
+          </span>
+          <span>{t('查看文件', 'View Files')}</span>
+        </button>
+        <button
+          className="project-menu-item danger"
+          disabled={deletingProjectId === project.id}
+          onClick={() => {
+            closeProjectActionMenu()
+            requestDeleteProject(project)
+          }}
+          type="button"
+        >
+          <span className="project-menu-item-icon" aria-hidden>
+            <img className="project-menu-item-icon-img" src={deleteIcon} alt="" />
+          </span>
+          <span>{deletingProjectId === project.id ? t('删除中...', 'Deleting...') : t('删除', 'Delete')}</span>
+        </button>
+      </div>
+    )
+  }
   const dashboardMetrics = useMemo(() => {
     let totalChars = 0
     let totalProjects = 0
@@ -4761,35 +5627,39 @@ function App() {
   const editorContextMenuItems: EditorContextMenuItem[] = [
     {
       key: 'continue',
-      label: '1 续写',
+      label: '1 Ai续写',
+      detail: '接住当前段落，继续推进冲突',
       shortcut: '',
       run: () => runAction(actions[0]),
-      disabled: isModelBusy || isModelUnavailable || !canRunSelectionActions
+      disabled: isRunning || isModelUnavailable || !canRunSelectionActions
     },
     {
       key: 'polish',
-      label: '2 润色',
+      label: '2 Ai润色',
+      detail: '优化表达与节奏，不改剧情',
       shortcut: '',
       run: () => runAction(actions[1]),
-      disabled: isModelBusy || isModelUnavailable || !canRunSelectionActions
+      disabled: isRunning || isModelUnavailable || !canRunSelectionActions
     },
     {
       key: 'expand',
-      label: '3 扩写',
+      label: '3 Ai扩写',
+      detail: '补充细节描写，增强画面张力',
       shortcut: '',
       run: () => runAction(actions[2]),
-      disabled: isModelBusy || isModelUnavailable || !canRunSelectionActions
+      disabled: isRunning || isModelUnavailable || !canRunSelectionActions
     },
+    { key: 'divider-ai-main', divider: true },
     {
       key: 'memory',
-      label: '4 记忆',
+      label: '4 加入记忆',
       shortcut: '',
       run: () => runAction(actions[3]),
-      disabled: isModelBusy || isModelUnavailable || !canRunSelectionActions
+      disabled: isRunning || isModelUnavailable || !canRunSelectionActions
     },
     {
       key: 'role-memory',
-      label: '5 角色',
+      label: '5 加入角色',
       shortcut: '',
       run: () => {
         const input = (selectedSnippet || readSelectedTextFromEditor()).trim()
@@ -4801,7 +5671,7 @@ function App() {
         setMemoryModule('role')
         setStatus('已保存到角色')
       },
-      disabled: isModelBusy || !canRunSelectionActions
+      disabled: isRunning || !canRunSelectionActions
     },
     {
       key: 'backup',
@@ -4812,7 +5682,7 @@ function App() {
         if (!input) return
         createBackup(input, '选中文本参考')
       },
-      disabled: isModelBusy || !canRunSelectionActions
+      disabled: isRunning || !canRunSelectionActions
     },
     { key: 'divider-ai', divider: true },
     {
@@ -4867,120 +5737,166 @@ function App() {
     if (typeof payload?.skillsPrompt === 'string') {
       setSkillsPrompt(payload.skillsPrompt)
     }
-    if (typeof payload?.officialDir === 'string' && payload.officialDir.trim()) {
-      setOfficialSkillsDir(payload.officialDir)
-    }
   }
 
-  async function refreshSkillsCenter() {
-    if (!window.novelDesktopApi?.listSkills) return
-    setIsSkillsCenterBusy(true)
-    try {
-      const payload = (await window.novelDesktopApi.listSkills()) as SkillsCenterPayload
-      applySkillsCenterPayload(payload)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '加载 Skills 失败')
-      setStatus('加载 Skills 失败')
-    } finally {
-      setIsSkillsCenterBusy(false)
-    }
+  function getSkillMarketAverageRating(skill: SkillMarketItem) {
+    const values = Object.values(skill.ratingByUser)
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value))
+    if (!values.length) return 0
+    return values.reduce((sum, value) => sum + value, 0) / values.length
   }
 
-  async function toggleSkillInstall(skill: SkillCatalogItem) {
-    if (!window.novelDesktopApi?.installSkill || !window.novelDesktopApi?.uninstallSkill) return
-    setIsSkillsCenterBusy(true)
-    try {
-      const payload = skill.installed
-        ? await window.novelDesktopApi.uninstallSkill({ id: skill.id, source: skill.source })
-        : await window.novelDesktopApi.installSkill({ id: skill.id, source: skill.source })
-      applySkillsCenterPayload(payload as SkillsCenterPayload)
-      setStatus(`${skill.name} 已${skill.installed ? '停用' : '应用'}`)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '更新 Skills 状态失败')
-      setStatus('更新 Skills 状态失败')
-    } finally {
-      setIsSkillsCenterBusy(false)
-    }
+  function getSkillMarketById(skillId: string) {
+    if (!skillId) return null
+    return skillMarketCatalog.find((item) => item.id === skillId) ?? null
   }
 
-  async function handleCustomSkillUpload(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0]
-    event.target.value = ''
-    if (!file) return
+  function buildModelInitSkillsPrompt() {
+    const modelInitSkill = getSkillMarketById(skillSlotAssignments.modelInit)
+    if (!modelInitSkill?.prompt.trim()) return ''
+    return [
+      '# 模型初始化Skills',
+      modelInitSkill.prompt.trim()
+    ].join('\n')
+  }
 
-    const lowerName = file.name.toLowerCase()
-    const isMarkdown =
-      lowerName.endsWith('.md') || lowerName.endsWith('.markdown') || file.type === 'text/markdown'
-    if (!isMarkdown) {
-      setStatus('请选择 Markdown 文件（.md）')
+  function buildActionScopedSkillPrompt(actionKey: WriterAction['key'] | 'custom') {
+    const snippets: string[] = []
+    const appendSkillPrompt = (slotKey: SkillSlotKey, label: string) => {
+      const skill = getSkillMarketById(skillSlotAssignments[slotKey])
+      if (!skill?.prompt.trim()) return
+      snippets.push(`[${label}]`)
+      snippets.push(skill.prompt.trim())
+    }
+    if (actionKey === 'continue') appendSkillPrompt('continue', '续写Skills')
+    if (actionKey === 'polish') appendSkillPrompt('polish', '润色Skills')
+    if (actionKey === 'expand') appendSkillPrompt('expand', '扩写Skills')
+    if (actionKey === 'continue' || actionKey === 'polish' || actionKey === 'expand' || actionKey === 'custom') {
+      appendSkillPrompt('deai', '去Ai味Skills')
+    }
+    return snippets.join('\n')
+  }
+
+  function openSkillsMarketplacePage(preferredCategory?: SkillMarketCategory) {
+    setActiveScreen('skills-market')
+    setSkillMarketViewTab('market')
+    if (preferredCategory) setSkillMarketCategoryFilter(preferredCategory)
+  }
+
+  function openSkillPickerForSlot(slotKey: SkillSlotKey, category: SkillMarketCategory) {
+    setSkillSlotPickerSlotKey(slotKey)
+    setSkillMarketCategoryFilter(category)
+  }
+
+  function applySkillToSlot(slotKey: SkillSlotKey, skillId: string) {
+    const skill = getSkillMarketById(skillId)
+    if (!skill) return
+    const userKey = currentSkillMarketUserId || `local-${currentSkillMarketUserEmail || 'guest'}`
+    setSkillSlotAssignments((previous) => ({ ...previous, [slotKey]: skillId }))
+    setSkillMarketCatalog((previous) =>
+      previous.map((item) => {
+        if (item.id !== skillId) return item
+        const usageUserIds = item.usageUserIds.includes(userKey)
+          ? item.usageUserIds
+          : [...item.usageUserIds, userKey]
+        return {
+          ...item,
+          usageUserIds,
+          updatedAt: nowLabel()
+        }
+      })
+    )
+    setStatus(`${skill.name} 已应用到 ${SKILLS_SLOT_CONFIG.find((slot) => slot.key === slotKey)?.title || slotKey}`)
+  }
+
+  function clearSkillSlot(slotKey: SkillSlotKey) {
+    setSkillSlotAssignments((previous) => ({ ...previous, [slotKey]: '' }))
+  }
+
+  function toggleSkillFavorite(skillId: string) {
+    if (!currentSkillMarketUserId) {
+      setStatus('请先登录在线账号后再收藏 Skills')
       return
     }
-
-    try {
-      const content = await file.text()
-      const baseName = file.name.replace(/\.[^.]+$/, '').trim() || '自定义 Skills'
-      if (window.novelDesktopApi?.createCustomSkill) {
-        setIsSkillsCenterBusy(true)
-        const payload = await window.novelDesktopApi.createCustomSkill({ name: baseName, content })
-        applySkillsCenterPayload(payload as SkillsCenterPayload)
-        setStatus(`已上传并应用 Skills：${baseName}`)
-      } else {
-        setSkillsPrompt(content)
-        setStatus(`已导入 Skills：${file.name}`)
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '读取 Skills 文件失败')
-      setStatus('读取 Skills 文件失败')
-    } finally {
-      setIsSkillsCenterBusy(false)
-    }
+    setSkillMarketCatalog((previous) =>
+      previous.map((item) => {
+        if (item.id !== skillId) return item
+        const hasStarred = item.favoriteUserIds.includes(currentSkillMarketUserId)
+        return {
+          ...item,
+          favoriteUserIds: hasStarred
+            ? item.favoriteUserIds.filter((id) => id !== currentSkillMarketUserId)
+            : [...item.favoriteUserIds, currentSkillMarketUserId],
+          updatedAt: nowLabel()
+        }
+      })
+    )
   }
 
-  function startSkillRename(skill: SkillCatalogItem) {
-    if (!skill.canRename) return
-    setEditingSkillId(skill.id)
-    setEditingSkillName(skill.name)
-  }
-
-  function cancelSkillRename() {
-    setEditingSkillId(null)
-    setEditingSkillName('')
-  }
-
-  async function commitSkillRename(skillId: string) {
-    const nextName = editingSkillName.trim()
-    if (!nextName || !window.novelDesktopApi?.renameCustomSkill) {
-      cancelSkillRename()
+  function rateSkillMarketItem(skillId: string, rating: number) {
+    if (!currentSkillMarketUserId) {
+      setStatus('请先登录在线账号后再评分')
       return
     }
-    setIsSkillsCenterBusy(true)
-    try {
-      const payload = await window.novelDesktopApi.renameCustomSkill({ id: skillId, name: nextName })
-      applySkillsCenterPayload(payload as SkillsCenterPayload)
-      setStatus(`已重命名 Skills：${nextName}`)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '重命名 Skills 失败')
-      setStatus('重命名 Skills 失败')
-    } finally {
-      setIsSkillsCenterBusy(false)
-      cancelSkillRename()
-    }
+    if (!Number.isFinite(rating) || rating < 1 || rating > 5) return
+    setSkillMarketCatalog((previous) =>
+      previous.map((item) => {
+        if (item.id !== skillId) return item
+        if (item.ratingByUser[currentSkillMarketUserId]) return item
+        return {
+          ...item,
+          ratingByUser: {
+            ...item.ratingByUser,
+            [currentSkillMarketUserId]: rating
+          },
+          updatedAt: nowLabel()
+        }
+      })
+    )
   }
 
-  async function deleteSkill(skill: SkillCatalogItem) {
-    if (!skill.canDelete || !window.novelDesktopApi?.deleteCustomSkill) return
-    setIsSkillsCenterBusy(true)
-    try {
-      const payload = await window.novelDesktopApi.deleteCustomSkill({ id: skill.id })
-      applySkillsCenterPayload(payload as SkillsCenterPayload)
-      setStatus(`${skill.name} 已${skill.installed ? '停用' : '应用'}`)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '删除 Skills 失败')
-      setStatus('删除 Skills 失败')
-    } finally {
-      setIsSkillsCenterBusy(false)
-      if (editingSkillId === skill.id) cancelSkillRename()
+  function addSkillToMarketplace() {
+    if (!currentSkillMarketUserId || !currentSkillMarketUserEmail) {
+      setStatus('请先登录在线账号后上传 Skills')
+      return
     }
+    const name = newSkillName.trim()
+    const description = newSkillDescription.trim()
+    const prompt = newSkillPrompt.trim()
+    if (!name || !prompt) {
+      setStatus('请填写 Skills 名称和内容')
+      return
+    }
+    setIsSubmittingNewSkill(true)
+    const nextSkill: SkillMarketItem = normalizeSkillMarketItem(
+      {
+        id: createSkillMarketId(),
+        name,
+        description,
+        prompt,
+        category: newSkillCategory,
+        authorId: currentSkillMarketUserId,
+        authorEmail: currentSkillMarketUserEmail,
+        isPublic: newSkillIsPublic,
+        createdAt: nowLabel(),
+        updatedAt: nowLabel(),
+        ratingByUser: {},
+        favoriteUserIds: [],
+        usageUserIds: []
+      },
+      skillMarketCatalog.length
+    )
+    setSkillMarketCatalog((previous) => [nextSkill, ...previous])
+    setNewSkillName('')
+    setNewSkillDescription('')
+    setNewSkillPrompt('')
+    setNewSkillCategory('general')
+    setNewSkillIsPublic(true)
+    setSkillMarketViewTab('market')
+    setSelectedSkillMarketId(nextSkill.id)
+    setStatus('已发布新的 Skills')
+    setIsSubmittingNewSkill(false)
   }
 
   async function refreshOllamaModels(options?: {
@@ -5083,6 +5999,931 @@ function App() {
     }
   }
 
+  function getOnlineUniqueId(session: OnlineAccountSession | null) {
+    const userId = String(session?.userId || '').trim()
+    if (userId) return userId
+
+    const apiKey = String(session?.apiKey || '').trim()
+    if (!apiKey) return ''
+
+    const compact = apiKey.replace(/^sk-/, '').replace(/[^a-zA-Z0-9]/g, '')
+    if (!compact) return ''
+    return compact.slice(0, 12)
+  }
+
+  async function parseGatewayErrorMessage(response: Response, fallback: string) {
+    const raw = await response.text()
+    if (!raw) return fallback
+    try {
+      const parsed = JSON.parse(raw) as {
+        error?: string
+        message?: string
+      }
+      if (typeof parsed.error === 'string' && parsed.error.trim()) return parsed.error.trim()
+      if (typeof parsed.message === 'string' && parsed.message.trim()) return parsed.message.trim()
+    } catch {
+      // keep fallback
+    }
+    return `${fallback}（${response.status}）`
+  }
+
+  function forceLogoutOnlineAccount(message: string) {
+    clearOnlineAccountSession()
+    const nextMessage = message.trim() || '当前账号已不可用，请重新登录'
+    setOnlineAccountNotice(nextMessage)
+    setStatus(nextMessage)
+    setError(nextMessage)
+    setConnectionState('failed')
+    setIssuesError('')
+    if (activeScreen === 'issues') {
+      setActiveScreen('writer')
+      setActivePanel('settings')
+    }
+  }
+
+  async function validateOnlineAccountSession(): Promise<boolean> {
+    const token = onlineAccountSession?.token.trim()
+    if (!token) return false
+    try {
+      const resp = await fetch(`${ONLINE_GATEWAY_BASE_URL}/auth/me`, {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      })
+      if (resp.ok) return true
+      const message = await parseGatewayErrorMessage(resp, '在线账号状态已失效')
+      if (resp.status === 401 || resp.status === 403) {
+        forceLogoutOnlineAccount(message)
+        return false
+      }
+      return true
+    } catch {
+      return true
+    }
+  }
+
+  function normalizeModelErrorMessage(message: string) {
+    const raw = String(message || '').trim()
+    if (!raw) return '未知错误'
+    const ollamaUnavailable =
+      /无法连接到\s*Ollama/i.test(raw) ||
+      /localhost:11434/i.test(raw) ||
+      /ECONNREFUSED/i.test(raw) ||
+      /fetch failed/i.test(raw)
+    if (config.kind === 'ollama' && ollamaUnavailable) {
+      return '找不到本地模型，请查看“模型板块”的“使用帮助”，并根据说明安装本地模型。'
+    }
+    return raw
+  }
+
+  function formatIssueTime(value: string) {
+    if (!value) return '--'
+    const ts = new Date(value).getTime()
+    if (!Number.isFinite(ts)) return value
+    return new Date(ts).toLocaleString('zh-CN')
+  }
+
+  async function pickImagesFromInput(maxCount: number): Promise<string[]> {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = 'image/*'
+    input.multiple = true
+    return new Promise((resolve) => {
+      input.onchange = () => {
+        const files = Array.from(input.files || []).slice(0, maxCount)
+        if (!files.length) {
+          resolve([])
+          return
+        }
+        Promise.all(
+          files.map(
+            (file) =>
+              new Promise<string>((res) => {
+                const reader = new FileReader()
+                reader.onload = () => res(String(reader.result || ''))
+                reader.onerror = () => res('')
+                reader.readAsDataURL(file)
+              })
+          )
+        ).then((items) => resolve(items.map((item) => item.trim()).filter(Boolean)))
+      }
+      input.click()
+    })
+  }
+
+  function openSkillPromptUploadPicker() {
+    skillPromptUploadInputRef.current?.click()
+  }
+
+  async function handleSkillPromptUpload(event: { target: HTMLInputElement }) {
+    const file = event.target.files?.[0]
+    if (!file) return
+    try {
+      const text = await file.text()
+      setNewSkillPrompt(text)
+      setStatus(`已加载提示词文件：${file.name}`)
+    } catch {
+      setStatus('读取提示词文件失败，请重试')
+    } finally {
+      event.target.value = ''
+    }
+  }
+
+  function applyOnlineAccountSession(session: OnlineAccountSession) {
+    const normalizedSession: OnlineAccountSession = {
+      ...session,
+      memberTier: session.memberTier ?? 'normal'
+    }
+    saveOnlineAccountLastEmail(normalizedSession.email)
+    setOnlineAccountSession(normalizedSession)
+    setIsOnlineAuthModalOpen(false)
+    setIsPasswordResetModalOpen(false)
+    saveOnlineAccountSession(normalizedSession)
+    setConfig((current) => ({
+      ...current,
+      baseUrl: ONLINE_OPENAI_BASE_URL,
+      apiKey: normalizedSession.apiKey
+    }))
+  }
+
+  function clearOnlineAccountSession() {
+    setOnlineAccountSession(null)
+    setIsMembershipModalOpen(false)
+    saveOnlineAccountSession(null)
+    setOpenAiModels([])
+    setConfig((current) => ({ ...current, apiKey: '' }))
+    persistedConnectionSignatureRef.current = ''
+    clearPersistedModelConnectionSignature()
+    setConnectionState('unknown')
+  }
+
+  function openOnlineAuthModal(mode: 'login' | 'register') {
+    if (assistantRunning) return
+    if (!onlineAccountEmail.trim()) {
+      const lastEmail = loadOnlineAccountLastEmail()
+      if (lastEmail) setOnlineAccountEmail(lastEmail)
+    }
+    setOnlineAccountPassword('')
+    setOnlineAuthMode(mode)
+    setOnlineAccountNotice('')
+    setIsOnlineAuthSuccessModalOpen(false)
+    setIsOnlineAuthModalOpen(true)
+  }
+
+  function closeOnlineAuthModal() {
+    if (isOnlineAccountLoading) return
+    setIsOnlineAuthModalOpen(false)
+    setOnlineAuthMode('login')
+    setOnlineAccountPassword('')
+  }
+
+  function closeOnlineAuthSuccessModal() {
+    setIsOnlineAuthSuccessModalOpen(false)
+    setOnlineAuthSuccessMessage('')
+  }
+
+  function openMembershipModal() {
+    if (!isOnlineAiLoggedIn || !onlineAccountSession) {
+      setOnlineAccountNotice('请先登录在线账号后再升级会员')
+      openOnlineAuthModal('login')
+      return
+    }
+    setMembershipRedeemCode('')
+    setIsMembershipModalOpen(true)
+  }
+
+  function closeMembershipModal() {
+    if (isMembershipApplying) return
+    setIsMembershipModalOpen(false)
+  }
+
+  async function submitMembershipChange(
+    payload: Record<string, unknown>,
+    fallback: string
+  ): Promise<{ membership?: { tier?: MemberTier; expiresAt?: string } }> {
+    if (!onlineAccountSession?.token.trim()) {
+      throw new Error('登录状态失效，请重新登录')
+    }
+
+    const endpointCandidates = ['/auth/membership/upgrade', '/auth/membership/redeem', '/auth/redeem']
+    let notFoundCount = 0
+    for (const endpoint of endpointCandidates) {
+      const resp = await fetch(`${ONLINE_GATEWAY_BASE_URL}${endpoint}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${onlineAccountSession.token}`
+        },
+        body: JSON.stringify(payload)
+      })
+
+      if (resp.status === 404) {
+        notFoundCount += 1
+        continue
+      }
+      if (!resp.ok) {
+        throw new Error(await parseGatewayErrorMessage(resp, fallback))
+      }
+      return (await resp.json()) as { membership?: { tier?: MemberTier; expiresAt?: string } }
+    }
+
+    if (notFoundCount > 0) {
+      throw new Error('会员接口不可用，请更新网关后端（缺少兑换路由）')
+    }
+    throw new Error(fallback)
+  }
+
+  async function applyMembershipPlan(plan: 'plus' | 'pro') {
+    if (!onlineAccountSession) return
+    setIsMembershipApplying(true)
+    try {
+      const data = await submitMembershipChange(
+        {
+          plan,
+          source: 'purchase',
+          durationDays: 30,
+          amountCents: plan === 'pro' ? 9900 : 3900
+        },
+        '会员开通失败'
+      )
+      const nextSession: OnlineAccountSession = {
+        ...onlineAccountSession,
+        memberTier: data.membership?.tier === 'pro' || data.membership?.tier === 'plus' ? data.membership.tier : 'normal',
+        membershipExpiresAt: String(data.membership?.expiresAt || '')
+      }
+      applyOnlineAccountSession(nextSession)
+      setOnlineAccountNotice(`已开通 ${plan === 'plus' ? 'Plus' : 'Pro'} 会员（30天）`)
+      setStatus(`会员已升级为 ${plan === 'plus' ? 'Plus' : 'Pro'}`)
+      setIsMembershipModalOpen(false)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '会员开通失败'
+      setOnlineAccountNotice(message)
+      setStatus(message)
+    } finally {
+      setIsMembershipApplying(false)
+    }
+  }
+
+  async function redeemMembershipCode() {
+    if (!onlineAccountSession) return
+    const code = membershipRedeemCode.trim().toUpperCase()
+    if (!code) {
+      setOnlineAccountNotice('请输入兑换码')
+      return
+    }
+    setIsMembershipApplying(true)
+    try {
+      const data = await submitMembershipChange(
+        {
+          plan: 'plus',
+          source: 'redeem',
+          code
+        },
+        '兑换失败'
+      )
+      const nextSession: OnlineAccountSession = {
+        ...onlineAccountSession,
+        memberTier: data.membership?.tier === 'pro' || data.membership?.tier === 'plus' ? data.membership.tier : 'normal',
+        membershipExpiresAt: String(data.membership?.expiresAt || '')
+      }
+      applyOnlineAccountSession(nextSession)
+      setOnlineAccountNotice('兑换成功：已开通周会员（7天）')
+      setStatus('兑换成功：周会员已生效')
+      setIsMembershipModalOpen(false)
+      setMembershipRedeemCode('')
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '兑换失败'
+      setOnlineAccountNotice(message)
+      setStatus(message)
+    } finally {
+      setIsMembershipApplying(false)
+    }
+  }
+
+  function openForgotPasswordModal() {
+    if (isOnlineAccountLoading || isPasswordResetLoading) return
+    setOnlineAccountNotice('')
+    setResetPasswordValue('')
+    setIsOnlineAuthModalOpen(false)
+    setIsPasswordResetModalOpen(true)
+  }
+
+  function closePasswordResetModal() {
+    if (isPasswordResetLoading) return
+    setIsPasswordResetModalOpen(false)
+    setResetPasswordValue('')
+  }
+
+  async function submitPasswordReset() {
+    const email = onlineAccountEmail.trim()
+    const password = resetPasswordValue
+    if (!email || !password) {
+      setOnlineAccountNotice('请输入邮箱和新密码')
+      return
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setOnlineAccountNotice('邮箱格式不正确')
+      return
+    }
+    if (password.length < 8) {
+      setOnlineAccountNotice('新密码至少 8 位')
+      return
+    }
+
+    setIsPasswordResetLoading(true)
+    setOnlineAccountNotice('')
+    try {
+      const resp = await fetch(`${ONLINE_GATEWAY_BASE_URL}/auth/password-reset`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      })
+      if (!resp.ok) {
+        throw new Error(await parseGatewayErrorMessage(resp, '重置密码失败'))
+      }
+      setOnlineAccountNotice('密码重置成功，请使用新密码登录')
+      setIsPasswordResetModalOpen(false)
+      setResetPasswordValue('')
+      setOnlineAuthMode('login')
+      setIsOnlineAuthModalOpen(true)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '重置密码失败，请稍后重试'
+      setOnlineAccountNotice(message)
+      setStatus(message)
+    } finally {
+      setIsPasswordResetLoading(false)
+    }
+  }
+
+  async function submitOnlineAccount(mode: 'login' | 'register') {
+    if (assistantRunning) {
+      setStatus('小助手处理中，请稍后再登录')
+      return
+    }
+    const email = onlineAccountEmail.trim()
+    const password = onlineAccountPassword
+    if (!email || !password) {
+      setOnlineAccountNotice(t('请输入邮箱和密码', 'Please enter email and password'))
+      return
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setOnlineAccountNotice(t('邮箱格式不正确', 'Invalid email format'))
+      return
+    }
+    if (password.length < 8) {
+      setOnlineAccountNotice(t('密码至少 8 位', 'Password must be at least 8 characters'))
+      return
+    }
+
+    setIsOnlineAccountLoading(true)
+    setOnlineAccountNotice('')
+    let provisionalToken = ''
+    let provisionalUserId = ''
+    let provisionalEmail = email
+    let provisionalMemberTier: MemberTier = 'normal'
+    let provisionalMembershipExpiresAt = ''
+    try {
+      const endpoint = mode === 'register' ? '/auth/register' : '/auth/login'
+      const authResp = await fetch(`${ONLINE_GATEWAY_BASE_URL}${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      })
+      if (!authResp.ok) {
+        throw new Error(await parseGatewayErrorMessage(authResp, t('登录失败', 'Authentication failed')))
+      }
+      const authData = (await authResp.json()) as {
+        token?: string
+        apiKey?: string
+        key?: string
+        user?: { id?: string; email?: string }
+        membership?: { tier?: MemberTier; expiresAt?: string }
+      }
+      const token = typeof authData.token === 'string' ? authData.token.trim() : ''
+      const userId = typeof authData.user?.id === 'string' ? authData.user.id.trim() : ''
+      const userEmail =
+        typeof authData.user?.email === 'string' && authData.user.email.trim()
+          ? authData.user.email.trim()
+          : email
+      if (!token || !userId) {
+        throw new Error(t('网关返回登录信息不完整', 'Gateway auth payload is incomplete'))
+      }
+      provisionalToken = token
+      provisionalUserId = userId
+      provisionalEmail = userEmail
+      provisionalMemberTier =
+        authData.membership?.tier === 'plus' || authData.membership?.tier === 'pro'
+          ? authData.membership.tier
+          : 'normal'
+      provisionalMembershipExpiresAt = String(authData.membership?.expiresAt || '')
+
+      let apiKey = ''
+      if (typeof authData.apiKey === 'string' && authData.apiKey.trim()) {
+        apiKey = authData.apiKey.trim()
+      } else if (typeof authData.key === 'string' && authData.key.trim()) {
+        apiKey = authData.key.trim()
+      }
+
+      if (!apiKey) {
+        const keyResp = await fetch(`${ONLINE_GATEWAY_BASE_URL}/auth/api-keys`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            name: `桌面端-${new Date().toLocaleDateString('zh-CN')}`
+          })
+        })
+        if (!keyResp.ok) {
+          throw new Error(await parseGatewayErrorMessage(keyResp, t('创建用户密钥失败', 'Failed to create user key')))
+        }
+        const keyData = (await keyResp.json()) as { apiKey?: string; key?: string }
+        apiKey =
+          typeof keyData.apiKey === 'string' && keyData.apiKey.trim()
+            ? keyData.apiKey.trim()
+            : typeof keyData.key === 'string'
+              ? keyData.key.trim()
+              : ''
+      }
+
+      if (!apiKey) {
+        throw new Error(t('未获取到用户密钥', 'Missing user API key'))
+      }
+
+      let balanceLabel = '--'
+      try {
+        const usageResp = await fetch(`${ONLINE_GATEWAY_BASE_URL}/auth/usage?days=30`, {
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        })
+        if (usageResp.ok) {
+          const usageData = (await usageResp.json()) as {
+            usage?: { summary?: { total_tokens?: number } }
+          }
+          const usedTokens = Number(usageData?.usage?.summary?.total_tokens ?? 0)
+          if (Number.isFinite(usedTokens) && usedTokens > 0) {
+            balanceLabel = `${t('近30天已用', 'Used in 30d')} ${usedTokens.toLocaleString('zh-CN')} tokens`
+          } else {
+            balanceLabel = t('余额待同步', 'Balance sync pending')
+          }
+        }
+      } catch {
+        // ignore usage query failure
+      }
+
+      applyOnlineAccountSession({
+        token,
+        userId,
+        email: userEmail,
+        apiKey,
+        membershipExpiresAt: provisionalMembershipExpiresAt,
+        balanceLabel,
+        memberTier: provisionalMemberTier
+      })
+      setOnlineAccountPassword('')
+      setIsOnlineAuthModalOpen(false)
+      setOnlineAuthMode('login')
+      const successMessage =
+        mode === 'register'
+          ? t('注册成功，已自动登录。', 'Registration successful. You are now logged in.')
+          : t('登录成功。', 'Login successful.')
+      setOnlineAuthSuccessMessage(successMessage)
+      setIsOnlineAuthSuccessModalOpen(true)
+      setOnlineAccountNotice(successMessage)
+      setStatus(t('在线账号已登录', 'Online account signed in'))
+    } catch (err) {
+      const message =
+        err instanceof Error
+          ? err.message
+          : t('登录失败，请稍后重试', 'Authentication failed. Please retry later.')
+      if (
+        /禁用|封禁|联系客服|blocked|forbidden/i.test(message) &&
+        provisionalToken &&
+        provisionalUserId
+      ) {
+        const blockedSession: OnlineAccountSession = {
+          token: provisionalToken,
+          userId: provisionalUserId,
+          email: provisionalEmail,
+          apiKey: '',
+          memberTier: provisionalMemberTier,
+          membershipExpiresAt: provisionalMembershipExpiresAt,
+          balanceLabel: '--',
+          quotaLabel: '--'
+        }
+        saveOnlineAccountLastEmail(blockedSession.email)
+        setOnlineAccountSession(blockedSession)
+        saveOnlineAccountSession(blockedSession)
+      }
+      setOnlineAccountNotice(message)
+      setStatus(message)
+      setError(message)
+    } finally {
+      setIsOnlineAccountLoading(false)
+    }
+  }
+
+  function logoutOnlineAccount() {
+    clearOnlineAccountSession()
+    setOnlineAccountNotice(t('已退出在线账号', 'Signed out from online account'))
+    setStatus(t('已退出在线账号', 'Signed out from online account'))
+  }
+
+  async function fetchIssues() {
+    if (!onlineAccountSession?.token.trim()) {
+      setIssues([])
+      setIssuesError('请先登录在线账号后再查看问题反馈')
+      return
+    }
+    setIsIssuesLoading(true)
+    setIssuesError('')
+    try {
+      const resp = await fetch(`${ONLINE_GATEWAY_BASE_URL}/issues`, {
+        headers: {
+          Authorization: `Bearer ${onlineAccountSession.token}`
+        }
+      })
+      if (!resp.ok) {
+        const message = await parseGatewayErrorMessage(resp, '获取问题列表失败')
+        if (resp.status === 401 || resp.status === 403) {
+          forceLogoutOnlineAccount(message)
+          return
+        }
+        throw new Error(message)
+      }
+      const data = (await resp.json()) as { issues?: IssueRecord[] }
+      setIssues(Array.isArray(data.issues) ? data.issues : [])
+    } catch (err) {
+      setIssuesError(err instanceof Error ? err.message : '获取问题列表失败')
+    } finally {
+      setIsIssuesLoading(false)
+    }
+  }
+
+  async function openIssueDetail(issueId: string) {
+    if (!onlineAccountSession?.token.trim()) return
+    setSelectedIssueId(issueId)
+    setIsIssueDetailLoading(true)
+    setIssuesError('')
+    try {
+      const resp = await fetch(`${ONLINE_GATEWAY_BASE_URL}/issues/${issueId}`, {
+        headers: {
+          Authorization: `Bearer ${onlineAccountSession.token}`
+        }
+      })
+      if (!resp.ok) {
+        const message = await parseGatewayErrorMessage(resp, '获取问题详情失败')
+        if (resp.status === 401 || resp.status === 403) {
+          forceLogoutOnlineAccount(message)
+          return
+        }
+        throw new Error(message)
+      }
+      const data = (await resp.json()) as { issue?: IssueRecord; comments?: IssueComment[] }
+      setSelectedIssue(data.issue || null)
+      setIssueComments(Array.isArray(data.comments) ? data.comments : [])
+      setIssueReplyContent('')
+      setIssueReplyImages([])
+    } catch (err) {
+      setIssuesError(err instanceof Error ? err.message : '获取问题详情失败')
+      setSelectedIssue(null)
+      setIssueComments([])
+    } finally {
+      setIsIssueDetailLoading(false)
+    }
+  }
+
+  async function submitIssue() {
+    if (!onlineAccountSession?.token.trim()) {
+      setStatus('请先登录在线账号后再提交问题')
+      openOnlineAuthModal('login')
+      return
+    }
+    const title = issueFormTitle.trim()
+    const content = issueFormContent.trim()
+    if (!title || !content) {
+      setIssuesError('请填写标题和问题描述')
+      return
+    }
+    setIsSubmittingIssue(true)
+    setIssuesError('')
+    try {
+      const resp = await fetch(`${ONLINE_GATEWAY_BASE_URL}/issues`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${onlineAccountSession.token}`
+        },
+        body: JSON.stringify({
+          title,
+          content,
+          images: issueFormImages
+        })
+      })
+      if (!resp.ok) {
+        const message = await parseGatewayErrorMessage(resp, '提交问题失败')
+        if (resp.status === 401 || resp.status === 403) {
+          forceLogoutOnlineAccount(message)
+          return
+        }
+        throw new Error(message)
+      }
+      const data = (await resp.json()) as { issue?: IssueRecord }
+      setIssueFormTitle('')
+      setIssueFormContent('')
+      setIssueFormImages([])
+      setStatus('问题已提交，默认仅管理员可见')
+      await fetchIssues()
+      if (data.issue?.id) {
+        await openIssueDetail(data.issue.id)
+      }
+    } catch (err) {
+      setIssuesError(err instanceof Error ? err.message : '提交问题失败')
+    } finally {
+      setIsSubmittingIssue(false)
+    }
+  }
+
+  async function submitIssueReply() {
+    if (!onlineAccountSession?.token.trim() || !selectedIssueId) return
+    const content = issueReplyContent.trim()
+    if (!content) {
+      setIssuesError('请填写回复内容')
+      return
+    }
+    setIsSubmittingIssueReply(true)
+    setIssuesError('')
+    try {
+      const resp = await fetch(`${ONLINE_GATEWAY_BASE_URL}/issues/${selectedIssueId}/comments`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${onlineAccountSession.token}`
+        },
+        body: JSON.stringify({
+          content,
+          images: issueReplyImages
+        })
+      })
+      if (!resp.ok) {
+        const message = await parseGatewayErrorMessage(resp, '提交回复失败')
+        if (resp.status === 401 || resp.status === 403) {
+          forceLogoutOnlineAccount(message)
+          return
+        }
+        throw new Error(message)
+      }
+      setIssueReplyContent('')
+      setIssueReplyImages([])
+      await openIssueDetail(selectedIssueId)
+      await fetchIssues()
+    } catch (err) {
+      setIssuesError(err instanceof Error ? err.message : '提交回复失败')
+    } finally {
+      setIsSubmittingIssueReply(false)
+    }
+  }
+
+  async function openIssueCenterPage() {
+    if (!onlineAccountSession?.token.trim()) {
+      setIssuesError('请先登录在线账号后使用问题反馈')
+      openOnlineAuthModal('login')
+      return
+    }
+    setActiveScreen('issues')
+    await fetchIssues()
+  }
+
+  async function openIssueAppealFromBlocked() {
+    closeOnlineAuthModal()
+    setIsMembershipModalOpen(false)
+    setIsPasswordResetModalOpen(false)
+    setIssuesError('')
+    if (!onlineAccountSession?.token.trim()) {
+      setStatus('请先登录账号后再发起申述')
+      return
+    }
+    setActiveScreen('issues')
+    await fetchIssues()
+  }
+
+  async function pickIssueImages(target: 'issue' | 'reply') {
+    const current = target === 'issue' ? issueFormImages : issueReplyImages
+    const maxCount = Math.max(0, 6 - current.length)
+    if (maxCount <= 0) return
+    const picked = await pickImagesFromInput(maxCount)
+    if (!picked.length) return
+    if (target === 'issue') {
+      setIssueFormImages((prev) => [...prev, ...picked].slice(0, 6))
+    } else {
+      setIssueReplyImages((prev) => [...prev, ...picked].slice(0, 6))
+    }
+  }
+
+  function closeModelGuide() {
+    setIsModelGuideOpen(false)
+    setModelGuideStep(1)
+    setModelGuideDraftSelection('')
+  }
+
+  function openModelGuideHelp() {
+    setModelGuideStep(1)
+    setModelGuideDraftSelection('')
+    setIsModelGuideOpen(true)
+  }
+
+  function applyOnlineModelGuide() {
+    setModelGuideSelection('online')
+    saveModelGuideSelection('online')
+    setIsModelGuideOpen(false)
+    setModelGuideStep(1)
+    setModelGuideDraftSelection('')
+    setConfig((current) => ({
+      ...current,
+      kind: 'openai',
+      baseUrl: ONLINE_OPENAI_BASE_URL,
+      model:
+        current.kind === 'openai' && current.model.trim()
+          ? current.model
+          : getDefaultOpenAiModel(current.apiKey)
+    }))
+    setActivePanel('settings')
+    const message = t(
+      '已切换到在线模型。请先注册或登录在线账号后再开始生成。',
+      'Switched to online model. Please register or sign in before generating.'
+    )
+    setOnlineAccountNotice(message)
+    setStatus(message)
+    if (!isOnlineAiLoggedIn) {
+      openOnlineAuthModal('login')
+    }
+  }
+
+  function applyLocalModelGuide() {
+    setModelGuideSelection('local')
+    saveModelGuideSelection('local')
+    setIsModelGuideOpen(false)
+    setModelGuideStep(1)
+    setModelGuideDraftSelection('')
+    setConfig((current) => ({
+      ...current,
+      kind: 'ollama',
+      baseUrl: 'http://localhost:11434'
+    }))
+    setActivePanel('settings')
+    setStatus(
+      t(
+        '已切换到本地模型。安装后保持 Ollama 开启，并在“模型”窗口选择本地模型即可本地推理。',
+        'Switched to local model. Download and open Ollama, then pick a local model in Model settings.'
+      )
+    )
+  }
+
+  function goNextModelGuideStep() {
+    if (!modelGuideDraftSelection) return
+    setModelGuideStep(2)
+  }
+
+  function toggleModelGuideDraftSelection(selection: Exclude<ModelGuideSelection, ''>) {
+    setModelGuideDraftSelection((current) => (current === selection ? '' : selection))
+  }
+
+  function ensureOpenAiLogin(actionLabel: string, options?: { requireMembership?: boolean }) {
+    const requireMembership = options?.requireMembership ?? true
+    if (config.kind !== 'openai') return true
+    if (!isOnlineAiLoggedIn || !onlineAccountSession?.apiKey.trim()) {
+      const message = t(
+        `使用在线 AI 前请先登录在线账号（${actionLabel}）`,
+        `Please sign in before ${actionLabel}.`
+      )
+      setOnlineAccountNotice(message)
+      setStatus(message)
+      setActivePanel('settings')
+      openOnlineAuthModal('login')
+      return false
+    }
+    if (requireMembership && !hasPaidMembership) {
+      const message = '当前非会员，无法使用'
+      setOnlineAccountNotice(message)
+      setStatus(message)
+      setActivePanel('settings')
+      setIsMembershipModalOpen(true)
+      return false
+    }
+    return true
+  }
+
+  async function refreshOpenAiModels(options?: {
+    silent?: boolean
+    syncModel?: boolean
+  }) {
+    const silent = Boolean(options?.silent)
+    const syncModel = Boolean(options?.syncModel)
+    if (config.kind !== 'openai') return
+    if (!ensureOpenAiLogin('刷新模型', { requireMembership: false })) {
+      setOpenAiModels([])
+      return
+    }
+    const baseUrl = normalizeBaseUrl(config.baseUrl, 'openai')
+    if (!baseUrl) return
+
+    if (!silent) setIsLoadingOpenAiModels(true)
+    try {
+      let models: string[] = []
+      let desktopFetchFailed = false
+      if (window.novelDesktopApi?.listOpenAiModels) {
+        try {
+          const payload = await window.novelDesktopApi.listOpenAiModels({
+            baseUrl,
+            apiKey: config.apiKey
+          })
+          if (typeof payload?.error === 'string' && payload.error.trim()) {
+            const noHandler = /No handler registered for 'novel:openai-models'/i.test(payload.error)
+            if (noHandler) {
+              desktopFetchFailed = true
+            } else {
+              if (!silent) {
+                setError(payload.error)
+                setStatus('加载接口模型失败')
+              }
+              setOpenAiModels([])
+              return
+            }
+          }
+          models = Array.isArray(payload?.models)
+            ? payload.models.filter(
+                (item): item is string => typeof item === 'string' && Boolean(item.trim())
+              )
+            : []
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          const noHandler = /No handler registered for 'novel:openai-models'/i.test(message)
+          if (noHandler) {
+            desktopFetchFailed = true
+          } else {
+            throw error
+          }
+        }
+      }
+
+      if (!models.length || desktopFetchFailed || !window.novelDesktopApi?.listOpenAiModels) {
+        const response = await fetch(buildOpenAiModelsUrl(baseUrl), {
+          method: 'GET',
+          headers: {
+            Accept: 'application/json',
+            ...(config.apiKey.trim() ? { Authorization: `Bearer ${config.apiKey.trim()}` } : {})
+          }
+        })
+        const raw = await response.text()
+        let data: unknown = {}
+        try {
+          data = raw ? (JSON.parse(raw) as unknown) : {}
+        } catch {
+          data = {}
+        }
+        if (!response.ok) {
+          const detail =
+            typeof data === 'object' &&
+            data &&
+            typeof (data as { error?: { message?: unknown } }).error?.message === 'string'
+              ? String((data as { error: { message: string } }).error.message).trim()
+              : ''
+          throw new Error(`模型列表请求失败：${response.status}${detail ? `，${detail}` : ''}`)
+        }
+        models = pickOpenAiModelNames(data)
+      }
+
+      const uniqueModels = [...new Set(models)]
+      const visibleModels = buildVisibleOpenAiModels(uniqueModels, config.apiKey)
+      const nextModels = visibleModels.sort((a, b) => {
+        const aRecommended = isRecommendedOpenAiModel(a, config.apiKey)
+        const bRecommended = isRecommendedOpenAiModel(b, config.apiKey)
+        if (aRecommended && !bRecommended) return -1
+        if (!aRecommended && bRecommended) return 1
+        return a.localeCompare(b, 'zh-CN')
+      })
+      setOpenAiModels(nextModels)
+
+      if (syncModel) {
+        const preferred = pickPreferredOpenAiModel(config.model, nextModels, config.apiKey)
+        if (preferred && preferred !== config.model) {
+          setConfig((current) => ({ ...current, model: preferred }))
+          if (!silent) setStatus(`已同步模型：${preferred}`)
+        }
+      }
+    } catch (err) {
+      if (!silent) {
+        setError(err instanceof Error ? err.message : '加载接口模型失败')
+        setStatus('加载接口模型失败')
+      }
+      setOpenAiModels([])
+    } finally {
+      if (!silent) setIsLoadingOpenAiModels(false)
+    }
+  }
+
   async function toggleCloudModelLoading(nextValue: boolean) {
     setLoadCloudModels(nextValue)
     if (config.kind !== 'ollama') return
@@ -5106,6 +6947,94 @@ function App() {
     if (!baseUrl) return
     void refreshOllamaModels({ silent: true, includeCloud: loadCloudModels })
   }, [config.kind, config.baseUrl, loadCloudModels])
+
+  useEffect(() => {
+    if (config.kind !== 'openai') return
+    const sessionApiKey = onlineAccountSession?.apiKey.trim() ?? ''
+    if (sessionApiKey && config.apiKey !== sessionApiKey) {
+      setConfig((current) =>
+        current.kind === 'openai' && current.apiKey !== sessionApiKey
+          ? { ...current, baseUrl: ONLINE_OPENAI_BASE_URL, apiKey: sessionApiKey }
+          : current
+      )
+      return
+    }
+    if (!sessionApiKey && config.apiKey) {
+      setConfig((current) =>
+        current.kind === 'openai' && current.apiKey ? { ...current, apiKey: '' } : current
+      )
+    }
+  }, [config.kind, config.apiKey, onlineAccountSession?.apiKey])
+
+  useEffect(() => {
+    if (config.kind !== 'openai') return
+    if (!config.model.trim()) {
+      setConfig((current) =>
+        current.kind === 'openai' && !current.model.trim()
+          ? { ...current, model: getDefaultOpenAiModel(current.apiKey) }
+          : current
+      )
+      return
+    }
+    const defaultBaseUrl = normalizeBaseUrl('', 'openai')
+    if (config.baseUrl !== defaultBaseUrl) {
+      setConfig((current) =>
+        current.kind === 'openai' && current.baseUrl !== defaultBaseUrl
+          ? { ...current, baseUrl: defaultBaseUrl }
+          : current
+      )
+      return
+    }
+    if (!config.apiKey.trim()) {
+      setOpenAiModels([])
+      return
+    }
+    void refreshOpenAiModels({ silent: true, syncModel: true })
+  }, [config.kind, config.baseUrl, config.apiKey])
+
+  useEffect(() => {
+    if (!onlineAccountSession?.token.trim()) return
+    void validateOnlineAccountSession()
+    const timer = window.setInterval(() => {
+      void validateOnlineAccountSession()
+    }, 60 * 1000)
+    return () => window.clearInterval(timer)
+  }, [onlineAccountSession?.token])
+
+  useEffect(() => {
+    if (config.kind !== 'openai') {
+      setIsOpenAiModelPickerOpen(false)
+      setPendingOpenAiModel('')
+      return
+    }
+    const nextModel = config.model.trim() || getDefaultOpenAiModel(config.apiKey)
+    if (!pendingOpenAiModel.trim()) {
+      setPendingOpenAiModel(nextModel)
+    }
+  }, [config.kind, config.model, config.apiKey, pendingOpenAiModel])
+
+  useEffect(() => {
+    if (config.kind === 'openai') {
+      const nextModel = assistantOpenAiModel.trim() || currentOpenAiModel
+      if (!nextModel) return
+      if (!assistantOpenAiModel.trim()) {
+        setAssistantOpenAiModel(nextModel)
+      }
+      return
+    }
+    const nextLocalModel = assistantOllamaModel.trim() || config.model.trim() || ollamaModels[0] || ''
+    if (!nextLocalModel) return
+    if (!assistantOllamaModel.trim()) {
+      setAssistantOllamaModel(nextLocalModel)
+    }
+  }, [
+    assistantOllamaModel,
+    assistantOpenAiModel,
+    config.kind,
+    config.model,
+    currentOpenAiModel,
+    ollamaModels
+  ])
 
   useEffect(() => {
     const signature = buildModelConnectionSignature(config)
@@ -5246,9 +7175,11 @@ function App() {
       const dragIds = roleDragIdsRef.current
       const offsetById = roleDragOffsetsByIdRef.current
       if (!dragIds.length || !Object.keys(offsetById).length) {
-        const nextX = Math.max(0, pointer.x - roleDragOffset.x)
-        const nextY = Math.max(0, pointer.y - roleDragOffset.y)
-        updateRoleMemory(draggingRoleId, { roleX: nextX, roleY: nextY })
+        const nextPosition = clampRoleNodePosition(
+          pointer.x - roleDragOffset.x,
+          pointer.y - roleDragOffset.y
+        )
+        updateRoleMemory(draggingRoleId, { roleX: nextPosition.x, roleY: nextPosition.y })
         return
       }
       const dragIdSet = new Set(dragIds)
@@ -5258,10 +7189,11 @@ function App() {
           if (!dragIdSet.has(item.id)) return item
           const offset = offsetById[item.id]
           if (!offset) return item
+          const nextPosition = clampRoleNodePosition(pointer.x - offset.x, pointer.y - offset.y)
           return {
             ...item,
-            roleX: Math.max(0, pointer.x - offset.x),
-            roleY: Math.max(0, pointer.y - offset.y)
+            roleX: nextPosition.x,
+            roleY: nextPosition.y
           }
         })
       )
@@ -5473,24 +7405,63 @@ function App() {
     )
   }
 
+  function getNormalizedNonEmptySelectionsFromEditor(): Monaco.Selection[] {
+    const editor = editorRef.current
+    const monaco = monacoRef.current
+    if (!editor || !monaco) return []
+    const rawSelections = (editor.getSelections() ?? []).filter(
+      (selection): selection is Monaco.Selection => Boolean(selection) && !selection.isEmpty()
+    )
+    if (rawSelections.length === 0) {
+      const primary = editor.getSelection()
+      if (primary && !primary.isEmpty()) {
+        return [primary]
+      }
+      return []
+    }
+    const ordered = [...rawSelections].sort((left, right) =>
+      monaco.Range.compareRangesUsingStarts(left, right)
+    )
+    const merged: Monaco.Selection[] = []
+    for (const selection of ordered) {
+      if (!merged.length) {
+        merged.push(selection)
+        continue
+      }
+      const previous = merged[merged.length - 1]
+      if (previous.equalsRange(selection)) {
+        continue
+      }
+      if (monaco.Range.areIntersectingOrTouching(previous, selection)) {
+        const startsWithPrevious = monaco.Range.compareRangesUsingStarts(previous, selection) <= 0
+        const endsWithPrevious = monaco.Range.compareRangesUsingEnds(previous, selection) >= 0
+        const mergedStart = startsWithPrevious ? previous : selection
+        const mergedEnd = endsWithPrevious ? previous : selection
+        merged[merged.length - 1] = new monaco.Selection(
+          mergedStart.startLineNumber,
+          mergedStart.startColumn,
+          mergedEnd.endLineNumber,
+          mergedEnd.endColumn
+        )
+        continue
+      }
+      merged.push(selection)
+    }
+    return merged
+  }
+
   function readSelectedTextFromEditor() {
     const editor = editorRef.current
     const model = editor?.getModel()
     if (!editor || !model) return ''
-    const selections = editor.getSelections() ?? []
-    const texts = selections
-      .filter((selection) => selection && !selection.isEmpty())
+    const texts = getNormalizedNonEmptySelectionsFromEditor()
       .map((selection) => model.getValueInRange(selection))
       .filter((text) => text.trim().length > 0)
     return texts.join('\n\n')
   }
 
   function readSelectionRangesFromEditor(): EditorSelectionRange[] {
-    const editor = editorRef.current
-    if (!editor) return []
-    return (editor.getSelections() ?? [])
-      .filter((selection) => selection && !selection.isEmpty())
-      .map((selection) => ({
+    return getNormalizedNonEmptySelectionsFromEditor().map((selection) => ({
         startLineNumber: selection.startLineNumber,
         startColumn: selection.startColumn,
         endLineNumber: selection.endLineNumber,
@@ -6194,12 +8165,17 @@ function App() {
   ) {
     if (!content.trim()) return
     const now = nowLabel()
+    const defaultPosition = getBackupNodeDefaultPosition()
+    const normalizedPosition = clampBackupNodePosition(
+      typeof options?.backupX === 'number' ? options.backupX : defaultPosition.x,
+      typeof options?.backupY === 'number' ? options.backupY : defaultPosition.y
+    )
     const backup: BackupItem = {
       id: Date.now(),
       title: title?.trim() || '写作参考',
       content,
-      ...(typeof options?.backupX === 'number' ? { backupX: options.backupX } : {}),
-      ...(typeof options?.backupY === 'number' ? { backupY: options.backupY } : {}),
+      backupX: normalizedPosition.x,
+      backupY: normalizedPosition.y,
       createdAt: now,
       updatedAt: now
     }
@@ -6301,7 +8277,13 @@ function App() {
 
   function appendMemoryItems(items: string[], kind: MemoryKind = 'info') {
     const normalized = items
-      .map((item) => item.replace(/^[-*\d.\s]+/, '').trim())
+      .map((item) =>
+        item
+          // Keep numeric role names like “4号”, only strip actual list markers.
+          .replace(/^\s*[-*•]+\s+/, '')
+          .replace(/^\s*\d+[.)、:：]\s+/, '')
+          .trim()
+      )
       .filter(Boolean)
     if (!normalized.length) return
 
@@ -6347,8 +8329,8 @@ function App() {
           roleName: kind === 'role' ? (parsedRole?.roleName ?? text) : undefined,
           roleNote: kind === 'role' ? (parsedRole?.roleNote ?? '') : undefined,
           roleStance: kind === 'role' ? 5 : undefined,
-          roleX: kind === 'role' ? 28 + (merged.length % 2) * 236 : undefined,
-          roleY: kind === 'role' ? 28 + Math.floor(merged.length / 2) * 132 : undefined,
+          roleX: kind === 'role' ? getRoleNodeDefaultPosition().x : undefined,
+          roleY: kind === 'role' ? getRoleNodeDefaultPosition().y : undefined,
           chapterId: chapter.id,
           chapterTitle: chapter.title,
           versionId: version.id,
@@ -6383,7 +8365,6 @@ function App() {
     const createdAt = nowLabel()
     setMemory((previous) => {
       const nextId = previous.reduce((max, item) => Math.max(max, item.id), 0) + 1
-      const roleIndex = previous.filter((item) => item.kind === 'role').length
       const requestedRoleName = (options?.roleName ?? '新角色').trim() || `角色${nextId}`
       let roleName = requestedRoleName
       const existingRoleNames = new Set(
@@ -6411,14 +8392,11 @@ function App() {
         }
       }
       const roleNote = options?.roleNote ?? ''
-      const nextRoleX =
-        typeof options?.roleX === 'number'
-          ? Math.max(0, options.roleX)
-          : 28 + (roleIndex % 2) * 236
-      const nextRoleY =
-        typeof options?.roleY === 'number'
-          ? Math.max(0, options.roleY)
-          : 28 + Math.floor(roleIndex / 2) * 132
+      const defaultRolePosition = getRoleNodeDefaultPosition()
+      const normalizedRolePosition = clampRoleNodePosition(
+        typeof options?.roleX === 'number' ? options.roleX : defaultRolePosition.x,
+        typeof options?.roleY === 'number' ? options.roleY : defaultRolePosition.y
+      )
       return [
         ...previous,
         {
@@ -6434,8 +8412,8 @@ function App() {
             kind === 'role'
               ? clampRoleStance(typeof options?.roleStance === 'number' ? options.roleStance : 5)
               : undefined,
-          roleX: kind === 'role' ? nextRoleX : undefined,
-          roleY: kind === 'role' ? nextRoleY : undefined,
+          roleX: kind === 'role' ? normalizedRolePosition.x : undefined,
+          roleY: kind === 'role' ? normalizedRolePosition.y : undefined,
           chapterId: chapter.id,
           chapterTitle: chapter.title,
           versionId: version.id,
@@ -6666,16 +8644,16 @@ function normalizeScriptRoleName(raw: string) {
     if (
       target instanceof Element &&
       target.closest(
-        '.role-graph-node, .role-link-handle, .role-graph-edge, .role-graph-corner-fullscreen, .role-graph-exit-button, .role-graph-visual-button, .graph-visual-panel'
+        '.role-graph-node, .role-link-handle, .role-graph-edge, .role-graph-corner-fullscreen, .role-graph-exit-button, .role-graph-visual-button, .graph-visual-panel, .role-graph-placeholder-card'
       )
     ) {
       return
     }
     const pointer = getRoleGraphPointFromClient(event.clientX, event.clientY)
-    if (!pointer) return
+    const defaultPosition = getRoleNodeDefaultPosition()
     appendMemoryItem('role', {
-      roleX: pointer.x - ROLE_NODE_WIDTH / 2,
-      roleY: pointer.y - ROLE_NODE_HEIGHT / 2
+      roleX: pointer?.x ?? defaultPosition.x,
+      roleY: pointer?.y ?? defaultPosition.y
     })
     setStatus('已新增角色节点')
   }
@@ -6957,9 +8935,11 @@ function normalizeScriptRoleName(raw: string) {
     const dragIds = roleDragIdsRef.current
     const offsetById = roleDragOffsetsByIdRef.current
     if (!dragIds.length || !Object.keys(offsetById).length) {
-      const nextX = Math.max(0, pointer.x - roleDragOffset.x)
-      const nextY = Math.max(0, pointer.y - roleDragOffset.y)
-      updateRoleMemory(draggingRoleId, { roleX: nextX, roleY: nextY })
+      const nextPosition = clampRoleNodePosition(
+        pointer.x - roleDragOffset.x,
+        pointer.y - roleDragOffset.y
+      )
+      updateRoleMemory(draggingRoleId, { roleX: nextPosition.x, roleY: nextPosition.y })
       return
     }
     const dragIdSet = new Set(dragIds)
@@ -6969,10 +8949,11 @@ function normalizeScriptRoleName(raw: string) {
         if (!dragIdSet.has(item.id)) return item
         const offset = offsetById[item.id]
         if (!offset) return item
+        const nextPosition = clampRoleNodePosition(pointer.x - offset.x, pointer.y - offset.y)
         return {
           ...item,
-          roleX: Math.max(0, pointer.x - offset.x),
-          roleY: Math.max(0, pointer.y - offset.y)
+          roleX: nextPosition.x,
+          roleY: nextPosition.y
         }
       })
     )
@@ -7133,16 +9114,16 @@ function normalizeScriptRoleName(raw: string) {
     if (
       target instanceof Element &&
       target.closest(
-        '.backup-graph-node, .backup-link-handle, .backup-graph-edge, .role-graph-corner-fullscreen, .role-graph-exit-button, .role-graph-visual-button, .graph-visual-panel'
+        '.backup-graph-node, .backup-link-handle, .backup-graph-edge, .role-graph-corner-fullscreen, .role-graph-exit-button, .role-graph-visual-button, .graph-visual-panel, .backup-graph-placeholder-card'
       )
     ) {
       return
     }
     const pointer = getBackupGraphPointFromClient(event.clientX, event.clientY)
-    if (!pointer) return
+    const defaultPosition = getBackupNodeDefaultPosition()
     createBackup('事件内容', '新事件', {
-      backupX: pointer.x - BACKUP_NODE_WIDTH / 2,
-      backupY: pointer.y - BACKUP_NODE_HEIGHT / 2
+      backupX: pointer?.x ?? defaultPosition.x,
+      backupY: pointer?.y ?? defaultPosition.y
     })
     setStatus('已新增事件卡')
   }
@@ -7321,6 +9302,32 @@ function normalizeScriptRoleName(raw: string) {
     setStatus('事件卡已更新')
   }
 
+  function openMemoryEditor(memoryId: number) {
+    const current = memory.find((item) => item.id === memoryId)
+    if (!current) return
+    setMemoryEditorDialog({
+      memoryId: current.id,
+      chapterTitle: current.chapterTitle,
+      versionTitle: current.versionTitle,
+      text: current.text
+    })
+  }
+
+  function closeMemoryEditor() {
+    setMemoryEditorDialog(null)
+  }
+
+  function commitMemoryEditor() {
+    if (!memoryEditorDialog) return
+    setMemory((previous) =>
+      previous.map((item) =>
+        item.id === memoryEditorDialog.memoryId ? { ...item, text: memoryEditorDialog.text } : item
+      )
+    )
+    setMemoryEditorDialog(null)
+    setStatus('信息记忆已更新')
+  }
+
   function openBackupRelationContextMenu(event: ReactMouseEvent<SVGElement>, relationId: number) {
     event.preventDefault()
     event.stopPropagation()
@@ -7435,9 +9442,11 @@ function normalizeScriptRoleName(raw: string) {
     const dragIds = backupDragIdsRef.current
     const offsetById = backupDragOffsetsByIdRef.current
     if (!dragIds.length || !Object.keys(offsetById).length) {
-      const nextX = Math.max(0, pointer.x - backupDragOffset.x)
-      const nextY = Math.max(0, pointer.y - backupDragOffset.y)
-      updateBackup(draggingBackupId, { backupX: nextX, backupY: nextY })
+      const nextPosition = clampBackupNodePosition(
+        pointer.x - backupDragOffset.x,
+        pointer.y - backupDragOffset.y
+      )
+      updateBackup(draggingBackupId, { backupX: nextPosition.x, backupY: nextPosition.y })
       return
     }
     const dragIdSet = new Set(dragIds)
@@ -7446,10 +9455,11 @@ function normalizeScriptRoleName(raw: string) {
         if (!dragIdSet.has(item.id)) return item
         const offset = offsetById[item.id]
         if (!offset) return item
+        const nextPosition = clampBackupNodePosition(pointer.x - offset.x, pointer.y - offset.y)
         return {
           ...item,
-          backupX: Math.max(0, pointer.x - offset.x),
-          backupY: Math.max(0, pointer.y - offset.y)
+          backupX: nextPosition.x,
+          backupY: nextPosition.y
         }
       })
     )
@@ -7527,14 +9537,33 @@ function normalizeScriptRoleName(raw: string) {
   async function askModel(
     instruction: string,
     input: string,
-    options?: { onProgress?: (message: string) => void }
+    options?: {
+      onProgress?: (message: string) => void
+      overrideProvider?: ProviderKind
+      overrideModel?: string
+    }
   ) {
     const reportProgress = (message: string) => {
       options?.onProgress?.(message)
     }
     reportProgress('整理当前章节上下文')
-    const provider = config.kind
+    const provider = options?.overrideProvider ?? config.kind
+    if (provider === 'openai' && !ensureOpenAiLogin('发起推理请求')) {
+      throw new Error('在线 AI 未登录或套餐不可用')
+    }
+    if (provider === 'openai') {
+      const valid = await validateOnlineAccountSession()
+      if (!valid) {
+        throw new Error('当前账号已不可用，请重新登录')
+      }
+    }
     const baseUrl = normalizeBaseUrl(config.baseUrl, provider)
+    const requestModelRaw = options?.overrideModel?.trim() || config.model.trim()
+    const requestModel = normalizeModelIdForRequest(provider, requestModelRaw) || requestModelRaw
+    const requestApiKey =
+      provider === 'openai'
+        ? (onlineAccountSession?.apiKey.trim() || config.apiKey.trim())
+        : config.apiKey.trim()
     const infoMemoryItems = memory
       .filter((item) => item.kind === 'info')
       .map((item) => item.text.trim())
@@ -7587,7 +9616,7 @@ function normalizeScriptRoleName(raw: string) {
           id: `inline-${Date.now()}`,
           createdAt: nowIso,
           provider,
-          model: config.model,
+          model: requestModel || config.model,
           baseUrl,
           instructionChars: instruction.length,
           inputChars: input.length,
@@ -7605,8 +9634,8 @@ function normalizeScriptRoleName(raw: string) {
       const response = await window.novelDesktopApi.generate({
         provider,
         baseUrl,
-        model: config.model,
-        apiKey: config.apiKey,
+        model: requestModel,
+        apiKey: requestApiKey,
         temperature: config.temperature,
         sessionId,
         instruction,
@@ -7648,7 +9677,7 @@ function normalizeScriptRoleName(raw: string) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: config.model,
+          model: requestModel,
           messages,
           stream: false,
           options: { temperature: config.temperature },
@@ -7673,15 +9702,36 @@ function normalizeScriptRoleName(raw: string) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}),
+        ...(requestApiKey ? { Authorization: `Bearer ${requestApiKey}` } : {}),
       },
       body: JSON.stringify({
-        model: config.model,
+        model: requestModel,
         messages,
         temperature: config.temperature,
       }),
     })
-    if (!response.ok) throw new Error(`接口请求失败：${response.status}`)
+    if (!response.ok) {
+      let errorMessage = `接口请求失败：${response.status}`
+      try {
+        const parsed = (await response.clone().json()) as {
+          error?: string | { message?: string }
+          message?: string
+        }
+        if (typeof parsed.error === 'string' && parsed.error.trim()) {
+          errorMessage = parsed.error.trim()
+        } else if (typeof parsed.error === 'object' && typeof parsed.error?.message === 'string' && parsed.error.message.trim()) {
+          errorMessage = parsed.error.message.trim()
+        } else if (typeof parsed.message === 'string' && parsed.message.trim()) {
+          errorMessage = parsed.message.trim()
+        }
+      } catch {
+        // keep fallback
+      }
+      if (response.status === 401 || response.status === 403) {
+        forceLogoutOnlineAccount(errorMessage)
+      }
+      throw new Error(errorMessage)
+    }
     const data = (await response.json()) as {
       choices?: Array<{ message?: { content?: string } }>
       error?: { message?: string }
@@ -7696,10 +9746,6 @@ function normalizeScriptRoleName(raw: string) {
   }
 
   async function runAction(action: WriterAction | 'custom') {
-    if (assistantRunning) {
-      setStatus('小助手处理中，请稍后再执行扩写/润色')
-      return
-    }
     const input = (selectedSnippet || readSelectedTextFromEditor()).trim()
     if (!input) {
       setStatus('请先选中文本')
@@ -7737,11 +9783,15 @@ function normalizeScriptRoleName(raw: string) {
     setStatus(`${currentAction.title} 执行中`)
 
     try {
-      const output = await askModel(currentAction.instruction, input)
+      const scopedSkillsPrompt = buildActionScopedSkillPrompt(currentAction.key)
+      const instructionWithSkills = scopedSkillsPrompt
+        ? `${currentAction.instruction}\n\n请同时遵循以下专项 Skills 约束：\n${scopedSkillsPrompt}`
+        : currentAction.instruction
+      const output = await askModel(instructionWithSkills, input)
       setResult(output || '模型未返回内容。')
       setStatus('已生成')
     } catch (err) {
-      setError(err instanceof Error ? err.message : '未知错误')
+      setError(normalizeModelErrorMessage(err instanceof Error ? err.message : '未知错误'))
       setStatus('请求失败')
     } finally {
       setIsRunning(false)
@@ -7749,8 +9799,7 @@ function normalizeScriptRoleName(raw: string) {
   }
 
   async function testConnection(options?: { auto?: boolean }) {
-    if (assistantRunning) {
-      setStatus('小助手处理中，请稍后再测试连接')
+    if (config.kind === 'openai' && !ensureOpenAiLogin('测试连接')) {
       return
     }
     const isAuto = options?.auto === true
@@ -7772,7 +9821,7 @@ function normalizeScriptRoleName(raw: string) {
       setConnectionState('connected')
       setStatus('连接正常')
     } catch (err) {
-      const message = err instanceof Error ? err.message : '连接失败'
+      const message = normalizeModelErrorMessage(err instanceof Error ? err.message : '连接失败')
       setError(message)
       if (persistedConnectionSignatureRef.current === connectionSignature) {
         persistedConnectionSignatureRef.current = ''
@@ -7782,69 +9831,9 @@ function normalizeScriptRoleName(raw: string) {
       setStatus('连接失败')
       if (isAuto) {
         console.error('模型自动连接失败', err)
-        window.alert('当前推理模型没有成功加载，请检查模型接口或者本地模型是否启动')
       }
     } finally {
       setIsRunning(false)
-    }
-  }
-
-  async function resetCurrentSession() {
-    const sessionId = ensureCurrentSessionId()
-    if (!sessionId) return
-    if (!window.novelDesktopApi?.resetSession) {
-      setStatus('仅桌面版支持会话缓存重置')
-      return
-    }
-
-    await window.novelDesktopApi.resetSession({ sessionId })
-    if (!currentSessionKey) return
-    const nextSessionId = createSessionId()
-    setSessionMap((previous) => ({ ...previous, [currentSessionKey]: nextSessionId }))
-    setRuntimeDiagnostics(null)
-    setRuntimeRequestLogs([])
-    setStatus('已重置当前会话')
-  }
-
-  async function buildSkillModel() {
-    if (config.kind !== 'ollama') {
-      setStatus('仅 Ollama 支持 Modelfile 生成')
-      return
-    }
-    if (!window.novelDesktopApi?.createSkillModel) {
-      setStatus('仅桌面版支持一键生成 Modelfile 模型')
-      return
-    }
-    const modelName = skillModelName.trim()
-    if (!modelName || !skillsPrompt.trim()) {
-      setStatus('请先填写模型名和 Skills')
-      return
-    }
-
-    setIsBuildingSkillModel(true)
-    setError('')
-    setStatus('正在生成 Skills 模型')
-    try {
-      const result = await window.novelDesktopApi.createSkillModel({
-        baseModel: config.model,
-        modelName,
-        skillsPrompt,
-      })
-      if (result.ok) {
-        setConfig((current) => ({ ...current, model: modelName }))
-        if (result.stdout?.trim()) {
-          setResult(result.stdout.trim())
-          setActivePanel('result')
-        }
-        setStatus(`已生成并切换模型：${modelName}`)
-      } else {
-        throw new Error(result.stderr || '模型生成失败')
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '模型生成失败')
-      setStatus('模型生成失败')
-    } finally {
-      setIsBuildingSkillModel(false)
     }
   }
 
@@ -7887,9 +9876,7 @@ function normalizeScriptRoleName(raw: string) {
       setStatus('未检测到编辑器选区，请先选中文本后再替换')
       return
     }
-    const selections = (editor.getSelections() ?? []).filter(
-      (selection) => selection && !selection.isEmpty()
-    )
+    const selections = getNormalizedNonEmptySelectionsFromEditor()
     if (!selections.length) {
       setStatus('请先选中文本后再替换')
       return
@@ -7953,17 +9940,16 @@ function normalizeScriptRoleName(raw: string) {
 
   function openAssistantDialog() {
     setAssistantOpen((previous) => {
-      const nextOpen = !previous
-      if (!nextOpen) return false
-      window.setTimeout(() => {
-        const pane = editorPaneRef.current
-        const dialog = assistantDialogRef.current
-        if (!pane || !dialog) return
+      if (previous) return false
+      const pane = editorPaneRef.current
+      if (pane) {
         const margin = 12
-        const x = Math.max(margin, pane.clientWidth - dialog.offsetWidth - margin)
-        const y = Math.max(margin, pane.clientHeight - dialog.offsetHeight - margin - 56)
+        const dialogWidth = assistantDialogRef.current?.offsetWidth ?? 430
+        const dialogHeight = assistantDialogRef.current?.offsetHeight ?? 420
+        const x = Math.max(margin, pane.clientWidth - dialogWidth - margin)
+        const y = Math.max(margin, pane.clientHeight - dialogHeight - margin - 56)
         setAssistantDialogPos({ x, y })
-      }, 0)
+      }
       return true
     })
   }
@@ -7982,10 +9968,6 @@ function normalizeScriptRoleName(raw: string) {
   }
 
   async function sendAssistantMessage() {
-    if (isRunning) {
-      setStatus('模型正在执行其他任务，请稍后再使用小助手')
-      return
-    }
     if (connectionState === 'checking') {
       setStatus('大模型启动中，请稍后再试')
       return
@@ -7996,6 +9978,10 @@ function normalizeScriptRoleName(raw: string) {
     }
     const message = assistantInput.trim()
     if (!message) return
+    if (!assistantSelectedModel.trim()) {
+      setStatus('请先为写作小助手选择模型')
+      return
+    }
     const selectedText = (selectedSnippet || readSelectedTextFromEditor()).trim()
     const selectionRanges = readSelectionRangesFromEditor()
     const hasSelection = selectedText.length > 0
@@ -8051,10 +10037,11 @@ ${selectedText || '(空)'}
 最近对话：
 ${conversationText}
 
-用户最新消息：
+        用户最新消息：
 ${message}`,
         {
-          onProgress: (msg) => pushProgress(msg)
+          onProgress: (msg) => pushProgress(msg),
+          overrideModel: assistantSelectedModel
         }
       )
       pushProgress('正在解析返回内容')
@@ -8126,7 +10113,8 @@ ${currentDraft}`
 3) 不要输出“已收到/处理中”等确认语。`,
             fallbackInput,
             {
-              onProgress: (msg) => pushProgress(msg)
+              onProgress: (msg) => pushProgress(msg),
+              overrideModel: assistantSelectedModel
             }
           )
         ).trim()
@@ -8522,7 +10510,7 @@ ${currentDraft}`
                         project.id === activeProjectId ? 'project-resume-button' : ''
                       }`}
                       onClick={() => {
-                        setProjectActionMenuId(null)
+                        closeProjectActionMenu()
                         openProject(project.id)
                       }}
                     >
@@ -8532,63 +10520,21 @@ ${currentDraft}`
                       <button
                         aria-expanded={projectActionMenuId === project.id}
                         className="text-button project-item-menu-trigger"
-                        onClick={() =>
-                          setProjectActionMenuId((current) =>
-                            current === project.id ? null : project.id
-                          )
-                        }
+                        data-project-menu-trigger={project.id}
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onMouseDown={(event) => event.stopPropagation()}
+                        onClick={() => toggleProjectActionMenu(project.id)}
                         title={t('更多操作', 'More actions')}
                         type="button"
                       >
-                        ⋯
+                        <img className="button-icon button-icon-more" src={moreIcon} alt="" aria-hidden />
                       </button>
-                      {projectActionMenuId === project.id && (
-                        <div className="project-item-menu-dropdown" role="menu">
-                          <button
-                            className="text-button"
-                            disabled={renamingProjectId === project.id}
-                            onClick={() => {
-                              setProjectActionMenuId(null)
-                              requestRenameProject(project)
-                            }}
-                            type="button"
-                          >
-                            {renamingProjectId === project.id
-                              ? t('重命名中...', 'Renaming...')
-                              : t('重命名', 'Rename')}
-                          </button>
-                          <button
-                            className="text-button"
-                            disabled={!hasDesktopProjectStorage}
-                            onClick={() => {
-                              setProjectActionMenuId(null)
-                              void openProjectFiles(project)
-                            }}
-                            type="button"
-                          >
-                            {t('查看文件', 'View Files')}
-                          </button>
-                          <button
-                            className="text-button danger"
-                            disabled={deletingProjectId === project.id}
-                            onClick={() => {
-                              setProjectActionMenuId(null)
-                              requestDeleteProject(project)
-                            }}
-                            type="button"
-                          >
-                            {deletingProjectId === project.id
-                              ? t('删除中...', 'Deleting...')
-                              : t('删除', 'Delete')}
-                          </button>
-                        </div>
-                      )}
+                      {renderProjectActionMenu(project)}
                     </div>
                   </div>
                 </li>
               ))}
             </ul>
-
             {!projects.length && (
               <p className="empty-tip">{t('还没有项目，先创建一个新项目。', 'No projects yet. Create one to start.')}</p>
             )}
@@ -8770,7 +10716,7 @@ ${currentDraft}`
                     title={t('打开设置', 'Open Settings')}
                     type="button"
                   >
-                    <span aria-hidden>⚙</span>
+                    <img className="button-icon button-icon-setting" src={settingIcon} alt="" aria-hidden />
                   </button>
                 )}
                 {hasDesktopWindowClose && (
@@ -8780,7 +10726,7 @@ ${currentDraft}`
                     title={t('关闭', 'Close')}
                     type="button"
                   >
-                    <span aria-hidden>✕</span>
+                    <span aria-hidden>X</span>
                   </button>
                 )}
               </div>
@@ -8880,7 +10826,7 @@ ${currentDraft}`
                             project.id === activeProjectId ? 'project-resume-button' : ''
                           }`}
                           onClick={() => {
-                            setProjectActionMenuId(null)
+                            closeProjectActionMenu()
                             openProject(project.id)
                           }}
                         >
@@ -8890,57 +10836,16 @@ ${currentDraft}`
                           <button
                             aria-expanded={projectActionMenuId === project.id}
                             className="text-button project-item-menu-trigger"
-                            onClick={() =>
-                              setProjectActionMenuId((current) =>
-                                current === project.id ? null : project.id
-                              )
-                            }
+                            data-project-menu-trigger={project.id}
+                            onPointerDown={(event) => event.stopPropagation()}
+                            onMouseDown={(event) => event.stopPropagation()}
+                            onClick={() => toggleProjectActionMenu(project.id)}
                             title={t('更多操作', 'More actions')}
                             type="button"
                           >
-                            ⋯
+                            <img className="button-icon button-icon-more" src={moreIcon} alt="" aria-hidden />
                           </button>
-                          {projectActionMenuId === project.id && (
-                            <div className="project-item-menu-dropdown" role="menu">
-                              <button
-                                className="text-button"
-                                disabled={renamingProjectId === project.id}
-                                onClick={() => {
-                                  setProjectActionMenuId(null)
-                                  requestRenameProject(project)
-                                }}
-                                type="button"
-                              >
-                                {renamingProjectId === project.id
-                                  ? t('重命名中...', 'Renaming...')
-                                  : t('重命名', 'Rename')}
-                              </button>
-                              <button
-                                className="text-button"
-                                disabled={!hasDesktopProjectStorage}
-                                onClick={() => {
-                                  setProjectActionMenuId(null)
-                                  void openProjectFiles(project)
-                                }}
-                                type="button"
-                              >
-                                {t('查看文件', 'View Files')}
-                              </button>
-                              <button
-                                className="text-button danger"
-                                disabled={deletingProjectId === project.id}
-                                onClick={() => {
-                                  setProjectActionMenuId(null)
-                                  requestDeleteProject(project)
-                                }}
-                                type="button"
-                              >
-                                {deletingProjectId === project.id
-                                  ? t('删除中...', 'Deleting...')
-                                  : t('删除', 'Delete')}
-                              </button>
-                            </div>
-                          )}
+                          {renderProjectActionMenu(project)}
                         </div>
                       </div>
                     </li>
@@ -8959,7 +10864,8 @@ ${currentDraft}`
                   onClick={() => void importProjectsFromDisk()}
                   type="button"
                 >
-                  {isImportingProjects ? t('导入中...', 'Importing...') : t('⇪ 导入作品', '⇪ Import Project')}
+                  <img className="button-icon button-icon-upload" src={uploadIcon} alt="" aria-hidden />
+                  <span>{isImportingProjects ? t('导入中...', 'Importing...') : t('导入作品', 'Import Project')}</span>
                 </button>
               )}
             </section>
@@ -9193,6 +11099,523 @@ ${currentDraft}`
     )
   }
 
+  if (activeScreen === 'skills-market') {
+    const skillListSource = skillMarketViewTab === 'my' ? mySkillMarketItems : visibleSkillMarketItems
+    const selectedSkill =
+      selectedSkillMarketItem && skillListSource.some((item) => item.id === selectedSkillMarketItem.id)
+        ? selectedSkillMarketItem
+        : skillListSource[0] ?? null
+    const selectedSkillAverage = selectedSkill ? getSkillMarketAverageRating(selectedSkill) : 0
+    const selectedSkillUserRating =
+      selectedSkill && currentSkillMarketUserId ? selectedSkill.ratingByUser[currentSkillMarketUserId] ?? 0 : 0
+    const canRateSelectedSkill = Boolean(selectedSkill && currentSkillMarketUserId && !selectedSkillUserRating)
+    const selectedSkillSlot =
+      selectedSkill ? SKILLS_SLOT_CONFIG.find((slot) => slot.category === selectedSkill.category) ?? null : null
+    const selectedSkillFavorite =
+      Boolean(selectedSkill && currentSkillMarketUserId && selectedSkill.favoriteUserIds.includes(currentSkillMarketUserId))
+
+    return (
+      <main className="writer-shell issue-shell">
+        <section className="app-frame">
+          <header className="menu-bar menu-bar-issues">
+            <div className="brand">
+              <img className="brand-logo" src={appLogo} alt={APP_DISPLAY_NAME} />
+              <div className="brand-copy">
+                <strong>{APP_DISPLAY_NAME}</strong>
+                <span>{t('让AI写作更可控', 'Make AI Writing More Controllable')}</span>
+              </div>
+            </div>
+            <div className="menu-project-name menu-project-name-issues" title="Skills提示词应用市场">
+              Skills提示词应用市场
+            </div>
+            <div className="menu-bar-right">
+              <div className="window-status">{status}</div>
+            </div>
+          </header>
+
+          <section className="issue-workspace">
+            <section className="issue-page skills-market-page">
+              <header className="issue-page-header">
+                <button className="text-button" onClick={() => setActiveScreen('writer')} type="button">
+                  ← 返回写作页
+                </button>
+                <strong>Skills提示词应用市场</strong>
+                <span className="issue-page-header-spacer" aria-hidden />
+              </header>
+
+              <div className="skills-market-toolbar">
+                <div className="skills-market-tabs">
+                  <button
+                    className={skillMarketViewTab === 'market' ? 'active' : ''}
+                    onClick={() => setSkillMarketViewTab('market')}
+                    type="button"
+                  >
+                    市场
+                  </button>
+                  <button
+                    className={skillMarketViewTab === 'my' ? 'active' : ''}
+                    onClick={() => setSkillMarketViewTab('my')}
+                    type="button"
+                  >
+                    我的
+                  </button>
+                </div>
+                <select
+                  value={skillMarketCategoryFilter}
+                  onChange={(event) =>
+                    setSkillMarketCategoryFilter(event.target.value as SkillMarketCategory | 'all')
+                  }
+                >
+                  <option value="all">全部分类</option>
+                  {SKILLS_MARKET_CATEGORY_OPTIONS.map((category) => (
+                    <option key={category.key} value={category.key}>
+                      {category.label}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={skillMarketSort}
+                  onChange={(event) => setSkillMarketSort(event.target.value as SkillMarketSort)}
+                >
+                  <option value="rating">按评分</option>
+                  <option value="usage">按使用人数</option>
+                  <option value="newest">按最新</option>
+                  <option value="oldest">按最早</option>
+                </select>
+                <input
+                  value={skillMarketSearch}
+                  onChange={(event) => setSkillMarketSearch(event.target.value)}
+                  placeholder="搜索 Skills 名称或描述"
+                />
+              </div>
+
+              <div className="skills-market-grid">
+                <section className="skills-market-list-card">
+                  <header>
+                    <h3>{skillMarketViewTab === 'my' ? '我的Skills' : '全部Skills'}</h3>
+                    <small>{`共 ${skillListSource.length} 个`}</small>
+                  </header>
+                  <ul className="skills-market-list">
+                    {skillListSource.map((item) => {
+                      const avg = getSkillMarketAverageRating(item)
+                      const userRated = currentSkillMarketUserId ? item.ratingByUser[currentSkillMarketUserId] : 0
+                      const isFavorite =
+                        currentSkillMarketUserId && item.favoriteUserIds.includes(currentSkillMarketUserId)
+                      return (
+                        <li
+                          className={`skills-market-item ${selectedSkill?.id === item.id ? 'is-active' : ''}`}
+                          key={item.id}
+                          onClick={() => setSelectedSkillMarketId(item.id)}
+                        >
+                          <div className="skills-market-item-head">
+                            <strong>{item.name}</strong>
+                            <button
+                              className={`skills-market-star ${isFavorite ? 'is-active' : ''}`}
+                              title={isFavorite ? '取消收藏' : '收藏'}
+                              type="button"
+                              onClick={(event) => {
+                                event.preventDefault()
+                                event.stopPropagation()
+                                toggleSkillFavorite(item.id)
+                              }}
+                            >
+                              ★
+                            </button>
+                          </div>
+                          <small>{skillMarketCategoryLabelByKey[item.category]}</small>
+                          <p>{getSkillMarketDisplayDescription(item)}</p>
+                          <div className="skills-market-item-meta">
+                            <span>{`评分 ${avg.toFixed(1)} / 5`}</span>
+                            <span>{`使用 ${item.usageUserIds.length}`}</span>
+                            <span>{userRated ? `你已评 ${userRated}★` : '未评分'}</span>
+                          </div>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                  {!skillListSource.length && <p className="empty-tip">暂无 Skills。</p>}
+                </section>
+
+                <section className="skills-market-detail-card">
+                  {selectedSkill ? (
+                    <>
+                      <header className="skills-market-detail-head">
+                        <h3>{selectedSkill.name}</h3>
+                        <small>{skillMarketCategoryLabelByKey[selectedSkill.category]}</small>
+                      </header>
+                      <p className="skills-market-detail-meta">
+                        {`作者：${selectedSkill.authorEmail} · 评分：${selectedSkillAverage.toFixed(1)} / 5 · 使用人数：${selectedSkill.usageUserIds.length}`}
+                      </p>
+                      <p>{getSkillMarketDisplayDescription(selectedSkill)}</p>
+                      <textarea readOnly value={selectedSkill.prompt} />
+                      <div className="skills-market-rating-row">
+                        <span>评分：</span>
+                        {[1, 2, 3, 4, 5].map((rating) => (
+                          <button
+                            className={`skills-market-rate-btn ${selectedSkillUserRating >= rating ? 'is-active' : ''}`}
+                            disabled={!canRateSelectedSkill}
+                            key={rating}
+                            type="button"
+                            onClick={() => rateSkillMarketItem(selectedSkill.id, rating)}
+                          >
+                            ★
+                          </button>
+                        ))}
+                        <small>
+                          {!currentSkillMarketUserId
+                            ? '登录后可评分'
+                            : selectedSkillUserRating
+                              ? `你已评分：${selectedSkillUserRating}★（每人仅一次）`
+                              : '你还未评分'}
+                        </small>
+                      </div>
+                      {selectedSkillSlot && (
+                        <div className="skills-market-apply-row">
+                          <button
+                            className="primary-button"
+                            onClick={() => applySkillToSlot(selectedSkillSlot.key, selectedSkill.id)}
+                            type="button"
+                          >
+                            {`应用到 ${selectedSkillSlot.title}`}
+                          </button>
+                          <span>{`当前槽位：${selectedSkillBySlot[selectedSkillSlot.key]?.name || '未设置'}`}</span>
+                        </div>
+                      )}
+                      <div className="skills-market-favorite-row">
+                        <button
+                          className={`text-button skills-market-star-toggle ${selectedSkillFavorite ? 'is-active' : ''}`}
+                          type="button"
+                          onClick={() => toggleSkillFavorite(selectedSkill.id)}
+                        >
+                          {selectedSkillFavorite ? '已收藏★' : '收藏★'}
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <p className="empty-tip">请选择一个 Skills 查看详情。</p>
+                  )}
+
+                  {skillMarketViewTab === 'my' && (
+                    <div className="skills-market-create-box">
+                      <h4>上传我的Skills</h4>
+                      <input
+                        value={newSkillName}
+                        onChange={(event) => setNewSkillName(event.target.value)}
+                        placeholder="Skills 名称"
+                      />
+                      <input
+                        value={newSkillDescription}
+                        onChange={(event) => setNewSkillDescription(event.target.value)}
+                        placeholder="Skills 描述"
+                      />
+                      <fieldset className="skills-market-category-radio-group">
+                        <legend>分类</legend>
+                        <div className="skills-market-category-radios">
+                          {SKILLS_MARKET_CATEGORY_OPTIONS.map((category) => (
+                            <label key={category.key} className="skills-market-category-radio">
+                              <input
+                                type="radio"
+                                name="new-skill-category"
+                                value={category.key}
+                                checked={newSkillCategory === category.key}
+                                onChange={(event) =>
+                                  setNewSkillCategory(event.target.value as SkillMarketCategory)
+                                }
+                              />
+                              <span>{category.label}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </fieldset>
+                      <textarea
+                        value={newSkillPrompt}
+                        onChange={(event) => setNewSkillPrompt(event.target.value)}
+                        placeholder="输入Skills提示词内容"
+                      />
+                      <label className="skills-market-public-switch">
+                        <input
+                          checked={newSkillIsPublic}
+                          type="checkbox"
+                          onChange={(event) => setNewSkillIsPublic(event.target.checked)}
+                        />
+                        <span>{newSkillIsPublic ? '公开（其他用户可见）' : '仅自己可见'}</span>
+                      </label>
+                      <div className="skills-market-submit-row">
+                        <button className="text-button" type="button" onClick={openSkillPromptUploadPicker}>
+                          上传提示词
+                        </button>
+                        <input
+                          ref={skillPromptUploadInputRef}
+                          className="skills-prompt-upload-input"
+                          type="file"
+                          accept=".md,.txt,.prompt,text/markdown,text/plain"
+                          onChange={(event) =>
+                            void handleSkillPromptUpload({
+                              target: event.target as HTMLInputElement
+                            })
+                          }
+                        />
+                        <button
+                          className="primary-button"
+                          disabled={isSubmittingNewSkill}
+                          type="button"
+                          onClick={addSkillToMarketplace}
+                        >
+                          {isSubmittingNewSkill ? '发布中...' : '发布我的Skills'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </section>
+              </div>
+            </section>
+          </section>
+        </section>
+      </main>
+    )
+  }
+
+  if (activeScreen === 'issues') {
+    return (
+      <main className="writer-shell issue-shell">
+        <section className="app-frame">
+          <header className="menu-bar menu-bar-issues">
+            <div className="brand">
+              <img className="brand-logo" src={appLogo} alt={APP_DISPLAY_NAME} />
+              <div className="brand-copy">
+                <strong>{APP_DISPLAY_NAME}</strong>
+                <span>{t('让AI写作更可控', 'Make AI Writing More Controllable')}</span>
+              </div>
+              <div className="brand-meta-row brand-meta-row-inline">
+                <span>{appVersionLabel || APP_VERSION_FALLBACK}</span>
+                {hasActivationSupport && (
+                  <button
+                    className={`activation-chip is-compact ${activationStatus.activated ? 'is-active' : ''}`}
+                    onClick={() => void openActivationDialog()}
+                    title={activationTooltip}
+                    type="button"
+                  >
+                    {activationLabel}
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="menu-project-name menu-project-name-issues" title="问题反馈中心">
+              问题反馈中心
+            </div>
+            <div className="menu-bar-right">
+              <div className="window-status">{status}</div>
+              {hasDesktopWindowControls && (
+                <div className="window-controls">
+                  <button
+                    className="window-control-button"
+                    onClick={() => void minimizeDesktopWindow()}
+                    title={t('最小化', 'Minimize')}
+                    type="button"
+                  >
+                    <span aria-hidden>─</span>
+                  </button>
+                  <button
+                    className="window-control-button"
+                    onClick={() => void toggleDesktopMaximizeWindow()}
+                    title={isWindowMaximized ? t('向下还原', 'Restore') : t('最大化', 'Maximize')}
+                    type="button"
+                  >
+                    <span aria-hidden>
+                      {isWindowMaximized ? (
+                        <svg className="window-control-icon" viewBox="0 0 24 24">
+                          <rect x="6" y="8" width="11" height="10" rx="1.5" />
+                          <path d="M9 8V6h9v9h-2" />
+                        </svg>
+                      ) : (
+                        <svg className="window-control-icon" viewBox="0 0 24 24">
+                          <rect x="6" y="6" width="12" height="12" rx="1.5" />
+                        </svg>
+                      )}
+                    </span>
+                  </button>
+                  <button
+                    className="window-control-button is-close"
+                    onClick={() => void closeDesktopWindow()}
+                    title={t('关闭', 'Close')}
+                    type="button"
+                  >
+                    <span aria-hidden>X</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          </header>
+
+          <section className="issue-workspace">
+            <section className="issue-page">
+              <header className="issue-page-header">
+                <button className="text-button" onClick={() => setActiveScreen('writer')} type="button">
+                  ← 返回写作页
+                </button>
+                <strong>问题反馈中心</strong>
+                <span className="issue-page-header-spacer" aria-hidden />
+              </header>
+
+              {issuesError && <p className="project-settings-notice is-error">{issuesError}</p>}
+
+              <div className="issue-page-grid">
+                <section className="issue-compose-card">
+                  <h3>提交新问题</h3>
+                  <input
+                    maxLength={140}
+                    onChange={(event) => setIssueFormTitle(event.target.value)}
+                    placeholder="标题（例如：模型连接失败）"
+                    value={issueFormTitle}
+                  />
+                  <textarea
+                    onChange={(event) => setIssueFormContent(event.target.value)}
+                    placeholder="详细描述复现步骤、期望结果与实际结果"
+                    value={issueFormContent}
+                  />
+                  <div className="issue-image-actions">
+                    <button className="text-button" onClick={() => void pickIssueImages('issue')} type="button">
+                      添加截图
+                    </button>
+                    {issueFormImages.length > 0 && (
+                      <button className="text-button danger" onClick={() => setIssueFormImages([])} type="button">
+                        清空截图
+                      </button>
+                    )}
+                  </div>
+                  {issueFormImages.length > 0 && (
+                    <div className="issue-image-grid">
+                      {issueFormImages.map((img, index) => (
+                        <img alt={`issue-upload-${index + 1}`} key={`${img.slice(0, 32)}-${index}`} src={img} />
+                      ))}
+                    </div>
+                  )}
+                  <div className="issue-compose-actions">
+                    <button className="primary-button" disabled={isSubmittingIssue} onClick={() => void submitIssue()} type="button">
+                      {isSubmittingIssue ? '提交中...' : '提交问题'}
+                    </button>
+                  </div>
+                </section>
+
+                <section className="issue-list-card">
+                  <header>
+                    <h3>问题列表</h3>
+                    <button className="text-button" disabled={isIssuesLoading} onClick={() => void fetchIssues()} type="button">
+                      {isIssuesLoading ? '刷新中...' : '刷新'}
+                    </button>
+                  </header>
+                  <ul className="issue-list">
+                    {issues.map((item) => (
+                      <li
+                        className={`issue-item ${selectedIssueId === item.id ? 'is-active' : ''}`}
+                        key={item.id}
+                        onClick={() => void openIssueDetail(item.id)}
+                      >
+                        <div className="issue-item-head">
+                          <strong>{item.title}</strong>
+                          <span className={`issue-visibility issue-${item.visibility}`}>
+                            {item.visibility === 'public' ? '公开' : '仅管理员可见'}
+                          </span>
+                        </div>
+                        <p>{item.content.slice(0, 120)}</p>
+                        <small>{`${item.userEmail} · 回复 ${item.replyCount} · 更新 ${formatIssueTime(item.updatedAt)}`}</small>
+                      </li>
+                    ))}
+                  </ul>
+                  {!issues.length && !isIssuesLoading && <p className="empty-tip">暂无问题记录。</p>}
+                </section>
+
+                <section className="issue-detail-card">
+                  {isIssueDetailLoading ? (
+                    <p className="empty-tip">正在加载详情...</p>
+                  ) : selectedIssue ? (
+                    <>
+                      <div className="issue-detail-scroll">
+                        <header className="issue-detail-head">
+                          <h3>{selectedIssue.title}</h3>
+                          <span className={`issue-visibility issue-${selectedIssue.visibility}`}>
+                            {selectedIssue.visibility === 'public' ? '公开可回复' : '仅管理员可见'}
+                          </span>
+                        </header>
+                        <p className="issue-detail-meta">
+                          {`${selectedIssue.userEmail} · 创建于 ${formatIssueTime(selectedIssue.createdAt)} · 最后更新 ${formatIssueTime(selectedIssue.updatedAt)}`}
+                        </p>
+                        <div className="issue-detail-content">{selectedIssue.content}</div>
+                        {selectedIssue.images.length > 0 && (
+                          <div className="issue-image-grid">
+                            {selectedIssue.images.map((img, index) => (
+                              <img alt={`issue-image-${index + 1}`} key={`${img.slice(0, 32)}-${index}`} src={img} />
+                            ))}
+                          </div>
+                        )}
+                        <h4>回复</h4>
+                        <ul className="issue-comment-list">
+                          {issueComments.map((comment) => (
+                            <li key={comment.id}>
+                              <div className="issue-comment-meta">
+                                <strong>{comment.userEmail}</strong>
+                                <span>{formatIssueTime(comment.createdAt)}</span>
+                              </div>
+                              <p>{comment.content}</p>
+                              {comment.images.length > 0 && (
+                                <div className="issue-image-grid">
+                                  {comment.images.map((img, index) => (
+                                    <img alt={`comment-image-${index + 1}`} key={`${img.slice(0, 32)}-${index}`} src={img} />
+                                  ))}
+                                </div>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                      <div className="issue-reply-box">
+                        <textarea
+                          onChange={(event) => setIssueReplyContent(event.target.value)}
+                          placeholder={selectedIssue.visibility === 'public' || selectedIssue.userId === onlineAccountSession?.userId ? '输入回复...' : '该问题暂未公开，当前不可回复'}
+                          value={issueReplyContent}
+                        />
+                        <div className="issue-image-actions">
+                          <button className="text-button" onClick={() => void pickIssueImages('reply')} type="button">
+                            添加图片
+                          </button>
+                          {issueReplyImages.length > 0 && (
+                            <button className="text-button danger" onClick={() => setIssueReplyImages([])} type="button">
+                              清空图片
+                            </button>
+                          )}
+                        </div>
+                        {issueReplyImages.length > 0 && (
+                          <div className="issue-image-grid">
+                            {issueReplyImages.map((img, index) => (
+                              <img alt={`reply-upload-${index + 1}`} key={`${img.slice(0, 32)}-${index}`} src={img} />
+                            ))}
+                          </div>
+                        )}
+                        <button
+                          className="primary-button"
+                          disabled={
+                            isSubmittingIssueReply ||
+                            !(selectedIssue.visibility === 'public' || selectedIssue.userId === onlineAccountSession?.userId)
+                          }
+                          onClick={() => void submitIssueReply()}
+                          type="button"
+                        >
+                          {isSubmittingIssueReply ? '回复中...' : '提交回复'}
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <p className="empty-tip">选择左侧问题后可查看详情并回复。</p>
+                  )}
+                </section>
+              </div>
+            </section>
+          </section>
+        </section>
+      </main>
+    )
+  }
+
   return (
     <main className="writer-shell">
       <aside className="quick-rail" aria-label="页面列表">
@@ -9285,7 +11708,7 @@ ${currentDraft}`
             title="新增其他页面"
             type="button"
           >
-            ▾
+            <img className="button-icon button-icon-more" src={moreIcon} alt="" aria-hidden />
           </button>
           {isAddPageMenuOpen && (
             <ul className="rail-add-menu">
@@ -9302,6 +11725,10 @@ ${currentDraft}`
             </ul>
           )}
         </div>
+        <button className="rail-bug-button" onClick={() => void openIssueCenterPage()} type="button">
+          <img className="button-icon button-icon-question" src={questionIcon} alt="" aria-hidden />
+          <span>提交Bug</span>
+        </button>
       </aside>
 
       <section className="app-frame">
@@ -9347,7 +11774,18 @@ ${currentDraft}`
                   title={isWindowMaximized ? t('向下还原', 'Restore') : t('最大化', 'Maximize')}
                   type="button"
                 >
-                  <span aria-hidden>{isWindowMaximized ? '❐' : '□'}</span>
+                  <span aria-hidden>
+                    {isWindowMaximized ? (
+                      <svg className="window-control-icon" viewBox="0 0 24 24">
+                        <rect x="6" y="8" width="11" height="10" rx="1.5" />
+                        <path d="M9 8V6h9v9h-2" />
+                      </svg>
+                    ) : (
+                      <svg className="window-control-icon" viewBox="0 0 24 24">
+                        <rect x="6" y="6" width="12" height="12" rx="1.5" />
+                      </svg>
+                    )}
+                  </span>
                 </button>
                 <button
                   className="window-control-button is-close"
@@ -9355,7 +11793,7 @@ ${currentDraft}`
                   title={t('关闭', 'Close')}
                   type="button"
                 >
-                  <span aria-hidden>✕</span>
+                  <span aria-hidden>X</span>
                 </button>
               </div>
             )}
@@ -9425,7 +11863,7 @@ ${currentDraft}`
                   onClick={() => setIsOverflowMenuOpen((previous) => !previous)}
                   title="更多版本"
                 >
-                  ▾
+                  <img className="button-icon button-icon-more" src={moreIcon} alt="" aria-hidden />
                 </button>
                 {isOverflowMenuOpen && (
                   <ul className="tab-overflow-menu">
@@ -9482,7 +11920,7 @@ ${currentDraft}`
                       title="查看历史版本"
                       aria-label="查看历史版本"
                     >
-                      👁
+                      <img className="button-icon button-icon-history" src={historyIcon} alt="" aria-hidden />
                     </button>
                     <div className="writing-mode-switch" role="group" aria-label="写作模式">
                       <button
@@ -9508,15 +11946,18 @@ ${currentDraft}`
                       </button>
                     </div>
                   </div>
+                  {activeVersion?.updatedAt ? (
+                    <span className="editor-version-row-time">{`最后修改时间：${activeVersion.updatedAt}`}</span>
+                  ) : null}
                 </div>
-                {activeVersion?.updatedAt ? (
-                  <span className="version-inline-time">{`最后修改时间：${activeVersion.updatedAt}`}</span>
-                ) : null}
-                <small className="version-updated-at">
-                  {`最后修改 ${activeVersion?.updatedAt ?? '--'}`}
-                </small>
               </div>
               <dl>
+                {showSelectedSnippetCount ? (
+                  <div>
+                    <dt>已选字数</dt>
+                    <dd>{selectedSnippetCharsWithoutPunctuation}</dd>
+                  </div>
+                ) : null}
                 <div>
                   <dt>字数</dt>
                   <dd>{counts.chars}</dd>
@@ -9524,18 +11965,6 @@ ${currentDraft}`
                 <div>
                   <dt>行数</dt>
                   <dd>{counts.lines}</dd>
-                </div>
-                <div>
-                  <dt>版本</dt>
-                  <dd>{counts.versions}</dd>
-                </div>
-                <div>
-                  <dt>记忆</dt>
-                  <dd>{counts.memories}</dd>
-                </div>
-                <div>
-                  <dt>参考</dt>
-                  <dd>{counts.backups}</dd>
                 </div>
               </dl>
             </div>
@@ -9619,18 +12048,16 @@ ${currentDraft}`
             </div>
 
             <footer className="command-strip">
-              {isModelBusy ? (
+              {isRunning ? (
                 <div className="command-strip-status">
-                  {assistantRunning
-                    ? '小助手思考中，请稍后再执行扩写/润色....'
-                    : connectionState === 'checking'
+                  {connectionState === 'checking'
                     ? '模型启动中，请稍后在输出面板查看....'
                     : '模型生成中，请稍后在输出面板查看....'}
                 </div>
               ) : (
                 actions.map((action) => (
                   <button
-                    disabled={!canRunSelectionActions || assistantRunning}
+                    disabled={!canRunSelectionActions}
                     key={action.key}
                     onMouseDown={(event) => event.preventDefault()}
                     onClick={() => void runAction(action)}
@@ -9699,30 +12126,61 @@ ${currentDraft}`
                     </div>
                   )}
                 </div>
-                <div className="assistant-chat-input-row">
+                <div className="assistant-chat-composer">
                   <textarea
                     placeholder="例如：把主角的语气改得更冷一点，但不要改剧情走向。"
                     value={assistantInput}
                     onChange={(event) => setAssistantInput(event.target.value)}
                     onKeyDown={handleAssistantInputKeyDown}
                   />
-                  <button
-                    className={`primary-button assistant-chat-send${
-                      isModelUnavailable ? ' is-unavailable' : ''
-                    }`}
-                    disabled={assistantSendDisabled}
-                    onClick={() => void sendAssistantMessage()}
-                    type="button"
-                  >
-                    {assistantSendLoading ? (
-                      <span className="assistant-chat-send-content">
-                        <span className="assistant-chat-send-spinner" aria-hidden="true" />
-                        <span>{assistantSendLabel}</span>
-                      </span>
-                    ) : (
-                      assistantSendLabel
-                    )}
-                  </button>
+                  <div className="assistant-chat-composer-footer">
+                    <label className="assistant-chat-model-quick-switch">
+                      <span>小助手模型</span>
+                      <select
+                        value={assistantSelectedModel}
+                        onChange={(event) => {
+                          const nextModel = event.target.value
+                          if (config.kind === 'openai') {
+                            setAssistantOpenAiModel(nextModel)
+                          } else {
+                            setAssistantOllamaModel(nextModel)
+                          }
+                        }}
+                        disabled={assistantRunning || assistantModelOptions.length === 0}
+                      >
+                        {assistantModelOptions.length > 0 ? (
+                          assistantModelOptions.map((item) => (
+                            <option key={item.value} value={item.value}>
+                              {item.label}
+                            </option>
+                          ))
+                        ) : (
+                          <option value="">
+                            {config.kind === 'openai' ? '暂无在线模型' : '暂无本地模型'}
+                          </option>
+                        )}
+                      </select>
+                    </label>
+                    <span className="assistant-chat-composer-tip">Enter 发送 · Shift+Enter 换行</span>
+                    <button
+                      className={`primary-button assistant-chat-send assistant-chat-send-round${
+                        isModelUnavailable ? ' is-unavailable' : ''
+                      }`}
+                      aria-label={assistantSendLabel}
+                      disabled={assistantSendDisabled}
+                      onClick={() => void sendAssistantMessage()}
+                      title={assistantSendLabel}
+                      type="button"
+                    >
+                      {assistantSendLoading ? (
+                        <span className="assistant-chat-send-content">
+                          <span className="assistant-chat-send-spinner" aria-hidden="true" />
+                        </span>
+                      ) : (
+                        <span aria-hidden="true">↑</span>
+                      )}
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
@@ -9746,7 +12204,10 @@ ${currentDraft}`
                 className={activePanel === 'settings' ? 'active' : ''}
                 onClick={() => setActivePanel('settings')}
               >
-                API
+                <span className="panel-tab-model-label">
+                  <span className={`panel-tab-model-dot ${modelTabStatusClass}`} aria-hidden="true" />
+                  <span>模型</span>
+                </span>
               </button>
               <button
                 className={activePanel === 'skills' ? 'active' : ''}
@@ -9809,14 +12270,14 @@ ${currentDraft}`
                 )}
                 <div className="memory-search-row">
                   <button
-                    className="text-button"
+                    className="text-button memory-add-button"
                     type="button"
-                    onClick={() => {
-                      const input = document.getElementById('memory-search-input')
-                      if (input instanceof HTMLInputElement) input.focus()
-                    }}
+                    onClick={() => appendMemoryItem(memoryModule)}
                   >
-                    搜索
+                    <span className="memory-add-button-icon" aria-hidden>
+                      +
+                    </span>
+                    <span>{memoryModule === 'role' ? '新增角色' : '新增记忆'}</span>
                   </button>
                   <div className="memory-search-input-wrap">
                     <input
@@ -9886,6 +12347,7 @@ ${currentDraft}`
                       </button>
                     )}
                     <div className="role-graph-viewport" style={roleGraphViewportStyle}>
+                      <div className="role-graph-canvas-surface" aria-hidden />
                       <svg className="role-graph-lines" width="100%" height="100%">
                         <defs>
                           <marker
@@ -10100,15 +12562,30 @@ ${currentDraft}`
                           </article>
                         )
                       })}
+                      {!visibleRoleMemory.length && (
+                        <button
+                          className="role-graph-placeholder-card"
+                          type="button"
+                          title="双击新增新的角色"
+                          onDoubleClick={(event) => {
+                            event.preventDefault()
+                            event.stopPropagation()
+                            const pointer = getRoleGraphPointFromClient(event.clientX, event.clientY)
+                            const defaultPosition = getRoleNodeDefaultPosition()
+                            appendMemoryItem('role', {
+                              roleX: pointer?.x ?? defaultPosition.x,
+                              roleY: pointer?.y ?? defaultPosition.y
+                            })
+                          }}
+                          style={{
+                            left: getRoleNodeDefaultPosition().x,
+                            top: getRoleNodeDefaultPosition().y
+                          }}
+                        >
+                          <strong>鼠标双击新增新的角色</strong>
+                        </button>
+                      )}
                     </div>
-                    <button
-                      className="role-graph-corner-fullscreen"
-                      onClick={() => void toggleRoleGraphFullscreen()}
-                      title={isRoleGraphBoardFullscreen ? '退出全屏' : '全屏'}
-                      type="button"
-                    >
-                      {isRoleGraphBoardFullscreen ? '⤡' : '⛶'}
-                    </button>
                     <button
                       className="text-button role-graph-visual-button"
                       onMouseDown={(event) => event.stopPropagation()}
@@ -10120,8 +12597,26 @@ ${currentDraft}`
                       title="脑图视觉设置"
                       type="button"
                     >
-                      ⚙
+                      <img className="button-icon button-icon-setting" src={settingIcon} alt="" aria-hidden />
                     </button>
+                    {!isRoleGraphBoardFullscreen && (
+                      <button
+                        className="role-graph-corner-fullscreen"
+                        onMouseDown={(event) => event.stopPropagation()}
+                        onClick={(event) => {
+                          event.preventDefault()
+                          event.stopPropagation()
+                          void toggleRoleGraphFullscreen()
+                        }}
+                        title="全屏查看脑图"
+                        aria-label="全屏查看脑图"
+                        type="button"
+                      >
+                        <svg className="graph-action-icon" viewBox="0 0 24 24" aria-hidden>
+                          <path d="M8 3H3v5M16 3h5v5M21 16v5h-5M3 16v5h5" />
+                        </svg>
+                      </button>
+                    )}
                     {isRoleGraphVisualDialogOpen && (
                       <div
                         className="graph-visual-panel"
@@ -10495,7 +12990,7 @@ ${currentDraft}`
                             openRoleRelationsPanel(item.id, 'memory-card')
                             return
                           }
-                          jumpToMemory(item)
+                          openMemoryEditor(item.id)
                         }}
                       >
                         <span>{index + 1}</span>
@@ -10523,19 +13018,18 @@ ${currentDraft}`
                                 {item.chapterTitle} / {item.versionTitle}
                                 <em>信息</em>
                               </button>
-                              <textarea
-                                value={item.text}
-                                onClick={(event) => event.stopPropagation()}
-                                onChange={(event) => {
-                                  setMemory((previous) =>
-                                    previous.map((memoryItem) =>
-                                      memoryItem.id === item.id
-                                        ? { ...memoryItem, text: event.target.value }
-                                        : memoryItem
-                                    )
-                                  )
+                              <button
+                                className="memory-preview-button"
+                                type="button"
+                                onClick={(event) => {
+                                  event.preventDefault()
+                                  event.stopPropagation()
+                                  openMemoryEditor(item.id)
                                 }}
-                              />
+                                title="点击查看和编辑完整内容"
+                              >
+                                {item.text.trim() || '（空内容）'}
+                              </button>
                             </>
                           )}
                         </div>
@@ -10555,7 +13049,7 @@ ${currentDraft}`
                     ))}
                   </ul>
                 )}
-                {!filteredMemory.length && (
+                {!filteredMemory.length && !(memoryModule === 'role' && roleGraphView === 'graph') && (
                   <p className="empty-tip">
                     {memorySearchQuery.trim()
                       ? memoryModule === 'role'
@@ -10566,12 +13060,6 @@ ${currentDraft}`
                         : '暂无信息记忆。'}
                   </p>
                 )}
-                <button
-                  className="text-button"
-                  onClick={() => appendMemoryItem(memoryModule)}
-                >
-                  {memoryModule === 'role' ? '新增角色' : '新增记忆'}
-                </button>
                 {!shouldRenderRoleDialogsInsideGraph && roleEditorDialog && (
                   <div
                     className="role-editor-modal-backdrop"
@@ -10579,7 +13067,10 @@ ${currentDraft}`
                       if (event.target === event.currentTarget) closeRoleEditor()
                     }}
                   >
-                    <div className="role-editor-modal" onMouseDown={(event) => event.stopPropagation()}>
+                    <div
+                      className="role-editor-modal memory-editor-modal"
+                      onMouseDown={(event) => event.stopPropagation()}
+                    >
                       <h3>编辑角色</h3>
                       <label>
                         <span>名称</span>
@@ -10653,7 +13144,7 @@ ${currentDraft}`
                       if (event.target === event.currentTarget) closeRoleRelationEditor()
                     }}
                   >
-                    <div className="role-editor-modal" onMouseDown={(event) => event.stopPropagation()}>
+                    <div className="role-editor-modal memory-editor-modal" onMouseDown={(event) => event.stopPropagation()}>
                       <h3>编辑角色关系</h3>
                       <label>
                         <span>{`亲密度 ${roleRelationEditorDialog.intimacy}（${getRoleIntimacyLabel(roleRelationEditorDialog.intimacy)}）`}</span>
@@ -10728,6 +13219,47 @@ ${currentDraft}`
                     </div>
                   </div>
                 )}
+                {memoryEditorDialog && (
+                  <div
+                    className="role-editor-modal-backdrop"
+                    onMouseDown={(event) => {
+                      if (event.target === event.currentTarget) closeMemoryEditor()
+                    }}
+                  >
+                    <div className="role-editor-modal memory-editor-modal" onMouseDown={(event) => event.stopPropagation()}>
+                      <h3>编辑信息记忆</h3>
+                      <p className="memory-editor-meta">
+                        {memoryEditorDialog.chapterTitle} / {memoryEditorDialog.versionTitle}
+                      </p>
+                      <label>
+                        <span>完整内容</span>
+                        <textarea
+                          className="memory-editor-textarea"
+                          autoFocus
+                          value={memoryEditorDialog.text}
+                          onChange={(event) =>
+                            setMemoryEditorDialog((previous) =>
+                              previous
+                                ? {
+                                    ...previous,
+                                    text: event.target.value
+                                  }
+                                : previous
+                            )
+                          }
+                        />
+                      </label>
+                      <div className="role-editor-actions">
+                        <button className="text-button" type="button" onClick={closeMemoryEditor}>
+                          取消
+                        </button>
+                        <button className="primary-button" type="button" onClick={commitMemoryEditor}>
+                          保存
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </section>
             )}
 
@@ -10758,14 +13290,16 @@ ${currentDraft}`
                 </div>
                 <div className="memory-search-row">
                   <button
-                    className="text-button"
+                    className="text-button memory-add-button"
                     type="button"
                     onClick={() => {
-                      const input = document.getElementById('backup-search-input')
-                      if (input instanceof HTMLInputElement) input.focus()
+                      createBackup('写作参考内容', '新参考')
                     }}
                   >
-                    搜索
+                    <span className="memory-add-button-icon" aria-hidden>
+                      +
+                    </span>
+                    <span>新增参考</span>
                   </button>
                   <div className="memory-search-input-wrap">
                     <input
@@ -10848,6 +13382,7 @@ ${currentDraft}`
                       </button>
                     )}
                     <div className="backup-graph-viewport" style={backupGraphViewportStyle}>
+                      <div className="backup-graph-canvas-surface" aria-hidden />
                       <svg className="backup-graph-lines" width="100%" height="100%">
                       <defs>
                         <marker
@@ -10985,6 +13520,19 @@ ${currentDraft}`
                             data-backup-id={backup.id}
                             key={backup.id}
                             onMouseDown={(event) => beginBackupDrag(event, backup.id)}
+                            onClick={(event) => {
+                              const target = event.target as HTMLElement
+                              if (
+                                target.closest(
+                                  '.backup-link-handle, .backup-link-mode-picker, .relation-color-control, .backup-link-target-indicator'
+                                )
+                              ) {
+                                return
+                              }
+                              event.preventDefault()
+                              event.stopPropagation()
+                              openBackupEditor(backup.id)
+                            }}
                             onContextMenu={(event) => openBackupNodeContextMenu(event, backup.id)}
                             onDoubleClick={(event) => {
                               event.preventDefault()
@@ -11069,15 +13617,30 @@ ${currentDraft}`
                           </article>
                         )
                       })}
+                      {!filteredBackups.length && (
+                        <button
+                          className="backup-graph-placeholder-card"
+                          type="button"
+                          title="双击新增事件"
+                          onDoubleClick={(event) => {
+                            event.preventDefault()
+                            event.stopPropagation()
+                            const pointer = getBackupGraphPointFromClient(event.clientX, event.clientY)
+                            const defaultPosition = getBackupNodeDefaultPosition()
+                            createBackup('事件内容', '新事件', {
+                              backupX: pointer?.x ?? defaultPosition.x,
+                              backupY: pointer?.y ?? defaultPosition.y
+                            })
+                          }}
+                          style={{
+                            left: getBackupNodeDefaultPosition().x,
+                            top: getBackupNodeDefaultPosition().y
+                          }}
+                        >
+                          <strong>鼠标双击新增事件</strong>
+                        </button>
+                      )}
                     </div>
-                    <button
-                      className="role-graph-corner-fullscreen"
-                      onClick={() => void toggleBackupGraphFullscreen()}
-                      title={isBackupGraphBoardFullscreen ? '退出全屏' : '全屏'}
-                      type="button"
-                    >
-                      {isBackupGraphBoardFullscreen ? '⤡' : '⛶'}
-                    </button>
                     <button
                       className="text-button role-graph-visual-button"
                       onMouseDown={(event) => event.stopPropagation()}
@@ -11089,8 +13652,26 @@ ${currentDraft}`
                       title="脑图视觉设置"
                       type="button"
                     >
-                      ⚙
+                      <img className="button-icon button-icon-setting" src={settingIcon} alt="" aria-hidden />
                     </button>
+                    {!isBackupGraphBoardFullscreen && (
+                      <button
+                        className="role-graph-corner-fullscreen"
+                        onMouseDown={(event) => event.stopPropagation()}
+                        onClick={(event) => {
+                          event.preventDefault()
+                          event.stopPropagation()
+                          void toggleBackupGraphFullscreen()
+                        }}
+                        title="全屏查看脑图"
+                        aria-label="全屏查看脑图"
+                        type="button"
+                      >
+                        <svg className="graph-action-icon" viewBox="0 0 24 24" aria-hidden>
+                          <path d="M8 3H3v5M16 3h5v5M21 16v5h-5M3 16v5h5" />
+                        </svg>
+                      </button>
+                    )}
                     {isBackupGraphVisualDialogOpen && (
                       <div
                         className="graph-visual-panel"
@@ -11299,7 +13880,7 @@ ${currentDraft}`
                           if (event.target === event.currentTarget) closeBackupRelationEditor()
                         }}
                       >
-                        <div className="role-editor-modal" onMouseDown={(event) => event.stopPropagation()}>
+                        <div className="role-editor-modal memory-editor-modal" onMouseDown={(event) => event.stopPropagation()}>
                           <h3>编辑事件因果</h3>
                           <label>
                             <span>因果描述</span>
@@ -11370,6 +13951,7 @@ ${currentDraft}`
                           <label>
                             <span>内容</span>
                             <textarea
+                              className="memory-editor-textarea"
                               value={backupEditorDialog.content}
                               onChange={(event) =>
                                 setBackupEditorDialog((previous) =>
@@ -11400,27 +13982,31 @@ ${currentDraft}`
                   <>
                     <ul className="backup-list">
                       {filteredBackups.map((backup) => (
-                        <li key={backup.id}>
+                        <li key={backup.id} onClick={() => openBackupEditor(backup.id)}>
                           <header>
-                            <input
-                              className="backup-title-input"
-                              value={backup.title}
-                              onChange={(event) =>
-                                updateBackup(backup.id, { title: event.target.value })
-                              }
-                            />
+                            <strong>{backup.title || '新参考'}</strong>
                             <span>{`改 ${backup.updatedAt}`}</span>
                           </header>
-                          <textarea
-                            value={backup.content}
-                            onChange={(event) =>
-                              updateBackup(backup.id, { content: event.target.value })
-                            }
-                          />
+                          <button
+                            className="backup-preview-button"
+                            type="button"
+                            onClick={(event) => {
+                              event.preventDefault()
+                              event.stopPropagation()
+                              openBackupEditor(backup.id)
+                            }}
+                            title="点击查看和编辑完整内容"
+                          >
+                            {backup.content.trim() || '（空内容）'}
+                          </button>
                           <div className="backup-actions">
                             <button
                               className="backup-delete"
-                              onClick={() => deleteBackup(backup.id)}
+                              onClick={(event) => {
+                                event.preventDefault()
+                                event.stopPropagation()
+                                deleteBackup(backup.id)
+                              }}
                             >
                               删除
                             </button>
@@ -11435,52 +14021,218 @@ ${currentDraft}`
                     )}
                   </>
                 )}
-                {backupGraphView === 'graph' && !filteredBackups.length && (
-                  <p className="empty-tip">
-                    {backupSearchQuery.trim() ? '没有匹配的事件。' : '暂无事件卡。'}
-                  </p>
-                )}
-                <button
-                  className="text-button"
-                  onClick={() => {
-                    const index = backups.length
-                    createBackup('写作参考内容', '新参考', {
-                      backupX: 28 + (index % 2) * 276,
-                      backupY: 28 + Math.floor(index / 2) * 170
-                    })
-                  }}
-                >
-                  新增参考
-                </button>
               </section>
             )}
 
             {activePanel === 'settings' && (
               <section className="panel-section settings">
-                <div className="paper-heading">
-                  <p>模型</p>
-                  <h2>模型接口</h2>
+                <div className="model-settings-heading">
+                  <div className="paper-heading">
+                    <p>模型</p>
+                    <h2>模型接口</h2>
+                  </div>
+                  <button className="text-button model-guide-help-button" onClick={openModelGuideHelp} type="button">
+                    <span className="model-guide-help-icon" aria-hidden>?</span>
+                    <span>{t('使用帮助', 'Help')}</span>
+                  </button>
                 </div>
                 <label>
-                    <span>类型</span>
+                  <span>类型</span>
                   <select
                     value={config.kind}
                     onChange={(event) => {
                       const kind = event.target.value as ProviderKind
+                      const guideSelection: ModelGuideSelection = kind === 'openai' ? 'online' : 'local'
+                      setModelGuideSelection(guideSelection)
+                      saveModelGuideSelection(guideSelection)
                       setConfig((current) => ({
                         ...current,
                         kind,
                         baseUrl:
                           kind === 'ollama'
                             ? 'http://localhost:11434'
-                            : current.baseUrl
+                            : ONLINE_OPENAI_BASE_URL,
+                        model:
+                          kind === 'openai' && current.kind !== 'openai'
+                            ? getDefaultOpenAiModel(current.apiKey)
+                            : current.model
                       }))
                     }}
                   >
-                    <option value="ollama">Ollama</option>
-                    <option value="openai">OpenAI 兼容接口</option>
+                    <option value="openai">在线模型（推荐）</option>
+                    <option value="ollama">本地模型（免费）</option>
                   </select>
                 </label>
+                {config.kind === 'openai' && (
+                  <>
+                  <section className="settings-online-account-card">
+                    <header className="settings-online-account-head">
+                      <strong>在线账号</strong>
+                      {isOnlineAiLoggedIn ? (
+                        <button
+                          className="settings-online-account-pill settings-online-account-pill-button is-on"
+                          onClick={logoutOnlineAccount}
+                          type="button"
+                        >
+                          退出登录
+                        </button>
+                      ) : (
+                        <span className="settings-online-account-pill is-off">未登录</span>
+                      )}
+                    </header>
+                    {isOnlineAiLoggedIn ? (
+                      <div className="settings-online-account-body">
+                        <p>{`账号：${onlineAccountSession?.email || '--'}`}</p>
+                        <p>{`唯一ID：${getOnlineUniqueId(onlineAccountSession) || '--'}`}</p>
+                        <p className="settings-online-account-line">
+                          <span>{`会员等级：${onlineMemberTierLabel}`}</span>
+                          <button
+                            className="text-button settings-membership-upgrade-button"
+                            onClick={openMembershipModal}
+                            type="button"
+                          >
+                            {membershipUpgradeButtonLabel}
+                          </button>
+                        </p>
+                        {onlineMemberTier !== 'normal' && <p>{`到期时间：${onlineMembershipExpiresLabel}`}</p>}
+                        <p>{`当前余额：${onlineBalanceDisplay}`}</p>
+                        <p>{`可用额度：${onlineQuotaDisplay}`}</p>
+                        {showOnlineQuotaBar && (
+                          <div className="settings-online-quota-progress" aria-label={`可用额度 ${onlineQuotaPercent.toFixed(0)}%`}>
+                            <span
+                              className="settings-online-quota-progress-fill"
+                              style={{ width: `${onlineQuotaPercent}%` }}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="settings-online-auth-entry">
+                        <div className="settings-online-login-center">
+                          <button
+                            className="primary-button"
+                            onClick={() => openOnlineAuthModal('login')}
+                            type="button"
+                          >
+                            登录
+                          </button>
+                        </div>
+                        <p className="settings-online-auth-links">
+                          <button
+                            className="settings-inline-link"
+                            onClick={openForgotPasswordModal}
+                            type="button"
+                          >
+                            忘记密码？
+                          </button>
+                          <span aria-hidden>|</span>
+                          <span>没有账号？</span>
+                          <button
+                            className="settings-inline-link"
+                            onClick={() => openOnlineAuthModal('register')}
+                            type="button"
+                          >
+                            立即注册
+                          </button>
+                        </p>
+                      </div>
+                    )}
+                  </section>
+                  {isOnlineAiLoggedIn && (
+                    <section className="settings-online-model-card">
+                      <header className="settings-online-model-head">
+                        <strong>当前模型</strong>
+                        <button
+                          className="text-button settings-online-model-edit-button"
+                          onClick={() => {
+                            setPendingOpenAiModel(currentOpenAiModel)
+                            setIsOpenAiModelPickerOpen((current) => !current)
+                          }}
+                          type="button"
+                        >
+                          {isOpenAiModelPickerOpen ? '收起' : '修改'}
+                        </button>
+                      </header>
+                      <div className="settings-online-model-current-row">
+                        <span className="settings-online-model-current-label">默认</span>
+                        <strong className="settings-online-model-current-value">
+                          {getOpenAiModelDisplayLabel(currentOpenAiModel, openAiModelRecommendationKey)}
+                        </strong>
+                      </div>
+                      {isOpenAiModelPickerOpen && (
+                        <>
+                          <div className="settings-online-model-picker-head">
+                            <span>可选模型</span>
+                            <small>{`共 ${openAiOptionalModels.length} 个`}</small>
+                          </div>
+                          {openAiOptionalModels.length ? (
+                            <div className="settings-online-model-list">
+                              {openAiOptionalModels.map((item) => {
+                                const normalizedOption = normalizeModelIdForRequest('openai', item.name)
+                                const isSelected = normalizedPendingOpenAiModel === normalizedOption
+                                const label = getOpenAiModelDisplayLabel(
+                                  item.name,
+                                  openAiModelRecommendationKey
+                                )
+                                return (
+                                  <button
+                                    key={item.name}
+                                    className={`settings-online-model-option ${isSelected ? 'is-selected' : ''}`}
+                                    onClick={() => setPendingOpenAiModel(item.name)}
+                                    title={label}
+                                    type="button"
+                                  >
+                                    <span>{label}</span>
+                                  </button>
+                                )
+                              })}
+                            </div>
+                          ) : (
+                            <p className="settings-online-model-empty">暂未获取可选模型。</p>
+                          )}
+                          <div className="settings-online-model-picker-actions">
+                            <button
+                              className="text-button"
+                              onClick={() => {
+                                setPendingOpenAiModel(currentOpenAiModel)
+                                setIsOpenAiModelPickerOpen(false)
+                              }}
+                              type="button"
+                            >
+                              取消
+                            </button>
+                            <button
+                              className="primary-button"
+                              disabled={
+                                !pendingOpenAiModel.trim() ||
+                                normalizedPendingOpenAiModel === normalizedCurrentOpenAiModel
+                              }
+                              onClick={() => {
+                                if (!pendingOpenAiModel.trim()) return
+                                setConfig((current) => ({ ...current, model: pendingOpenAiModel }))
+                                setIsOpenAiModelPickerOpen(false)
+                              }}
+                              type="button"
+                            >
+                              确认使用
+                            </button>
+                          </div>
+                        </>
+                      )}
+                      <p className="settings-online-account-note">
+                        {isLoadingOpenAiModels
+                          ? '正在加载模型列表...'
+                          : '点击“修改”后可选择并确认使用新模型。'}
+                      </p>
+                      {openAiBlockedByMembership && (
+                        <p className="settings-membership-warning">当前非会员，无法使用</p>
+                      )}
+                    </section>
+                  )}
+                  </>
+                )}
+                {config.kind !== 'openai' && (
+                  <>
                 <label>
                   <span>基础地址</span>
                   <input
@@ -11488,12 +14240,13 @@ ${currentDraft}`
                     onChange={(event) =>
                       setConfig((current) => ({ ...current, baseUrl: event.target.value }))
                     }
+                    placeholder="http://localhost:11434"
                   />
                 </label>
                 <label>
                   <span>模型</span>
                   <div className="settings-model-row">
-                    {config.kind === 'ollama' && ollamaModels.length > 0 ? (
+                    {ollamaModels.length > 0 ? (
                       <select
                         value={config.model}
                         onChange={(event) =>
@@ -11568,19 +14321,6 @@ ${currentDraft}`
                     </div>
                   )}
                 </label>
-                {config.kind === 'openai' && (
-                  <label>
-                    <span>API 密钥</span>
-                    <input
-                      value={config.apiKey}
-                      onChange={(event) =>
-                        setConfig((current) => ({ ...current, apiKey: event.target.value }))
-                      }
-                      placeholder="sk-..."
-                      type="password"
-                    />
-                  </label>
-                )}
                 <label>
                   <span>温度 {config.temperature.toFixed(1)}</span>
                   <input
@@ -11610,339 +14350,216 @@ ${currentDraft}`
                     <span>{`当前模型连接：${connectionStatusLabel}`}</span>
                   </div>
                 </div>
-                <section className="settings-runtime-card">
-                  <header className="settings-runtime-card-header">
-                    <strong>Skills 生效诊断</strong>
-                    <small>
-                      {runtimeDiagnostics?.generatedAt
-                        ? `最近请求：${new Date(runtimeDiagnostics.generatedAt).toLocaleString('zh-CN', {
-                            hour12: false
-                          })}`
-                        : '尚未发送请求'}
-                    </small>
-                  </header>
-                  <div className="settings-runtime-status-row">
-                    <span
-                      className={`settings-runtime-pill ${runtimeSkillsLoaded ? 'is-on' : 'is-off'}`}
-                    >
-                      已加载
-                    </span>
-                    <span
-                      className={`settings-runtime-pill ${runtimeSkillsInjected ? 'is-on' : 'is-off'}`}
-                    >
-                      已注入
-                    </span>
-                    <span
-                      className={`settings-runtime-pill ${runtimeSkillsHit ? 'is-on' : 'is-off'}`}
-                    >
-                      已命中
-                    </span>
-                  </div>
-                  <p className="settings-runtime-tip">
-                    已加载：有可用 Skills；已注入：system 中包含 Skills；已命中：本次请求在带 Skills 的上下文中执行。
-                  </p>
-                  <div className="settings-runtime-hash-row">
-                    <small>
-                      Skills Hash：{runtimeDiagnostics?.skillsPromptHash || '暂无'}
-                    </small>
-                    <small>
-                      System Hash：{runtimeDiagnostics?.systemPromptHash || '暂无'}
-                    </small>
-                  </div>
-                  <div className="settings-runtime-preview">
-                    <div className="settings-runtime-preview-head">
-                      <span>注入预览（System）</span>
-                    </div>
-                    <textarea
-                      readOnly
-                      value={runtimeSystemPreview || '暂无注入预览。先执行一次“测试连接”或写作动作。'}
-                    />
-                  </div>
-                  <div className="settings-runtime-log">
-                    <div className="settings-runtime-log-head">最近请求日志</div>
-                    {visibleRuntimeLogs.length > 0 ? (
-                      <ul className="settings-runtime-log-list">
-                        {visibleRuntimeLogs.slice(0, 10).map((log) => (
-                          <li key={log.id}>
-                            <strong>{`${new Date(log.createdAt).toLocaleTimeString('zh-CN', {
-                              hour12: false
-                            })} · ${log.model}`}</strong>
-                            <small>{`${log.provider} · memory ${log.memoryCount} · input ${log.inputChars} chars · skills ${log.skillsInjected ? 'yes' : 'no'}`}</small>
-                          </li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <p className="empty-tip">暂无请求日志。</p>
-                    )}
-                  </div>
-                </section>
-                <label>
-                  <span>自定义动作</span>
-                  <textarea
-                    className="custom-prompt"
-                    value={customPrompt}
-                    onChange={(event) => setCustomPrompt(event.target.value)}
-                  />
-                </label>
-                <label>
-                  <span>写作 Skills（由应用中心已应用 Skills 生成，每个会话首次注入）</span>
-                  <p className="panel-note-tip settings-note-tip">
-                    已应用 Skills 会汇总为写作规则，在当前章节会话首次注入到 system，用于稳定文风与写作约束。
-                  </p>
-                  <ul className="settings-skills-list">
-                    {installedSkillCatalog.map((skill) => (
-                      <li key={skill.id}>
-                        <div className="skills-item-main">
-                          <strong>{skill.name}</strong>
-                          <small className="skills-source-tag">
-                            {skill.source === 'official' ? '官方' : '自定义'}
-                          </small>
-                        </div>
-                        <div className="skills-item-actions">
-                          <button
-                            className="text-button danger"
-                            disabled={isSkillsCenterBusy || !hasSkillsCenter}
-                            onClick={() => void toggleSkillInstall(skill)}
-                          >
-                            停用
-                          </button>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                  {!installedSkillCatalog.length && <p className="empty-tip">暂无已安装 Skills。</p>}
-                </label>
-                <div className="settings-advanced">
-                  <button
-                    className="settings-advanced-toggle"
-                    type="button"
-                    onClick={() => setIsAdvancedSettingsOpen((previous) => !previous)}
-                  >
-                    {isAdvancedSettingsOpen ? '收起高级功能' : '展开高级功能'}
-                  </button>
-                  {isAdvancedSettingsOpen && (
-                    <div className="settings-advanced-content">
-                      <label>
-                        <span>Skills 模型名（用于 Modelfile 生成）</span>
-                        <input
-                          value={skillModelName}
-                          onChange={(event) => setSkillModelName(event.target.value)}
-                          placeholder="novelwriter-style:v1"
-                        />
-                      </label>
-                      <div className="result-actions">
-                        <div className="session-reset-wrap">
-                          <button onClick={() => void resetCurrentSession()} disabled={isRunning}>
-                            重置当前章节会话
-                          </button>
-                          <span className="session-reset-tip">
-                            切换模型一般无需重置；仅在要清空当前章节历史时使用。
-                          </span>
-                        </div>
-                        <button
-                          onClick={() => void buildSkillModel()}
-                          disabled={
-                            isBuildingSkillModel ||
-                            config.kind !== 'ollama' ||
-                            (hasActivationSupport && !activationStatus.activated) ||
-                            !skillModelName.trim() ||
-                            !skillsPrompt.trim()
-                          }
-                        >
-                          {isBuildingSkillModel ? '正在生成模型...' : '生成 Skills 模型'}
-                        </button>
-                      </div>
-                      <p className="empty-tip settings-session-id">
-                        当前会话 ID：{currentSessionId || '未初始化'}
-                      </p>
-                    </div>
-                  )}
-                </div>
+                  </>
+                )}
               </section>
             )}
 
             {activePanel === 'skills' && (
               <section className="panel-section skills-center">
-                <div className="paper-heading">
-                  <p>Skills</p>
-                  <h2>应用中心</h2>
-                </div>
-                <p className="panel-note-tip">
-                  应用后的 Skills 会参与生成“写作 Skills”提示，并在每个章节会话首次注入，帮助统一文风、叙事习惯和禁忌规则。
-                </p>
-                <div className="skills-center-toolbar">
-                  <label className="text-button skills-upload-button">
-                    上传自定义 .md
-                    <input
-                      accept=".md,.markdown,text/markdown"
-                      className="skills-upload-input"
-                      onChange={handleCustomSkillUpload}
-                      ref={customSkillUploadRef}
-                      type="file"
-                    />
-                  </label>
+                <div className="model-settings-heading">
+                  <div className="paper-heading">
+                    <p>Skills</p>
+                    <h2>应用中心</h2>
+                  </div>
                   <button
-                    className="text-button"
-                    disabled={!hasSkillsCenter || isSkillsCenterBusy}
-                    onClick={() => void refreshSkillsCenter()}
+                    className="text-button model-guide-help-button"
+                    onClick={() => openSkillsMarketplacePage()}
+                    type="button"
                   >
-                    刷新
+                    <img className="button-icon button-icon-app-center" src={appCenterIcon} alt="" aria-hidden />
+                    <span>前往应用中心</span>
                   </button>
                 </div>
-                <p className="skills-center-summary">
-                  已应用 {installedSkillsCount} 个 Skills
-                  {!hasSkillsCenter ? '（当前仅桌面版支持应用中心）' : ''}
+                <p className="panel-note-tip">
+                  默认先不应用 Skills。你可以在“前往Skills中心”中按分类挑选后再应用到对应槽位。
                 </p>
-
-                <div className="skills-group">
-                  <h3>已安装 Skills</h3>
-                  <ul className="skills-list">
-                    {installedSkillCatalog.map((skill) => (
-                      <li key={skill.id}>
-                        <div className="skills-item-main">
-                          {editingSkillId === skill.id && skill.source === 'custom' ? (
-                            <input
-                              autoFocus
-                              className="skills-rename-input"
-                              onBlur={() => void commitSkillRename(skill.id)}
-                              onChange={(event) => setEditingSkillName(event.target.value)}
-                              onKeyDown={(event) => {
-                                if (event.key === 'Enter') {
-                                  event.preventDefault()
-                                  void commitSkillRename(skill.id)
-                                }
-                                if (event.key === 'Escape') {
-                                  event.preventDefault()
-                                  cancelSkillRename()
-                                }
-                              }}
-                              value={editingSkillName}
-                            />
+                <div className="skills-slot-grid">
+                  {SKILLS_SLOT_CONFIG.map((slot) => {
+                    const selectedSkill = selectedSkillBySlot[slot.key]
+                    return (
+                      <article className={`skills-slot-card ${selectedSkill ? '' : 'is-empty'}`} key={slot.key}>
+                        <div className="skills-slot-header">
+                          <h3>{slot.title}</h3>
+                          <button
+                            className="text-button skills-slot-add-btn"
+                            type="button"
+                            onClick={() => openSkillPickerForSlot(slot.key, slot.category)}
+                          >
+                            +新增Skills
+                          </button>
+                        </div>
+                        {slot.description ? <p>{slot.description}</p> : null}
+                        <div className={`skills-slot-current ${selectedSkill ? '' : 'is-empty'}`}>
+                          {selectedSkill ? (
+                            <strong>{selectedSkill.name}</strong>
                           ) : (
-                            <strong>{skill.name}</strong>
+                            <span className="skills-slot-empty">
+                              <img src={emptyIcon} alt="" aria-hidden />
+                            </span>
                           )}
-                          <small className="skills-source-tag">
-                            {skill.source === 'official' ? '官方' : '自定义'}
-                          </small>
-                          <small>{skill.updatedAt ? `更新于 ${skill.updatedAt}` : ''}</small>
-                        </div>
-                        <div className="skills-item-actions">
-                          <button
-                            className="text-button danger"
-                            disabled={isSkillsCenterBusy || !hasSkillsCenter}
-                            onClick={() => void toggleSkillInstall(skill)}
-                          >
-                            停用
-                          </button>
-                          {skill.source === 'custom' && (
+                          {selectedSkill ? (
                             <button
-                              className="text-button"
-                              disabled={isSkillsCenterBusy || !hasSkillsCenter}
-                              onClick={() => startSkillRename(skill)}
+                              className="text-button danger skills-slot-clear-btn"
+                              type="button"
+                              onClick={() => clearSkillSlot(slot.key)}
                             >
-                              重命名
+                              <img className="button-icon button-icon-remove" src={removeIcon} alt="" aria-hidden />
+                              <span>清除</span>
                             </button>
-                          )}
-                          {skill.source === 'custom' && (
-                            <button
-                              className="text-button danger"
-                              disabled={isSkillsCenterBusy || !hasSkillsCenter}
-                              onClick={() => void deleteSkill(skill)}
-                            >
-                              删除
-                            </button>
-                          )}
+                          ) : null}
                         </div>
-                      </li>
-                    ))}
-                  </ul>
-                  {!installedSkillCatalog.length && <p className="empty-tip">暂无已安装 Skills。</p>}
-                </div>
-
-                <div className="skills-group">
-                  <h3>{`官方 Skills（来源 ${officialSkillsDir}，仅可应用/停用）`}</h3>
-                  <ul className="skills-list">
-                    {availableOfficialSkillCatalog.map((skill) => (
-                      <li key={skill.id}>
-                        <div className="skills-item-main">
-                          <strong>{skill.name}</strong>
-                          <small>{skill.updatedAt ? `更新于 ${skill.updatedAt}` : ''}</small>
-                        </div>
-                        <div className="skills-item-actions">
-                          <button
-                            className="text-button"
-                            disabled={isSkillsCenterBusy || !hasSkillsCenter}
-                            onClick={() => void toggleSkillInstall(skill)}
-                          >
-                            应用
-                          </button>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                  {!availableOfficialSkillCatalog.length && (
-                    <p className="empty-tip">官方 Skills 均已应用。</p>
-                  )}
-                </div>
-
-                <div className="skills-group">
-                  <h3>自定义 Skills（可上传/重命名/删除）</h3>
-                  <ul className="skills-list">
-                    {availableCustomSkillCatalog.map((skill) => (
-                      <li key={skill.id}>
-                        <div className="skills-item-main">
-                          {editingSkillId === skill.id ? (
-                            <input
-                              autoFocus
-                              className="skills-rename-input"
-                              onBlur={() => void commitSkillRename(skill.id)}
-                              onChange={(event) => setEditingSkillName(event.target.value)}
-                              onKeyDown={(event) => {
-                                if (event.key === 'Enter') {
-                                  event.preventDefault()
-                                  void commitSkillRename(skill.id)
-                                }
-                                if (event.key === 'Escape') {
-                                  event.preventDefault()
-                                  cancelSkillRename()
-                                }
-                              }}
-                              value={editingSkillName}
-                            />
-                          ) : (
-                            <strong>{skill.name}</strong>
-                          )}
-                          <small>{skill.updatedAt ? `更新于 ${skill.updatedAt}` : ''}</small>
-                        </div>
-                        <div className="skills-item-actions">
-                          <button
-                            className="text-button"
-                            disabled={isSkillsCenterBusy || !hasSkillsCenter}
-                            onClick={() => void toggleSkillInstall(skill)}
-                          >
-                            应用
-                          </button>
-                          <button
-                            className="text-button"
-                            disabled={isSkillsCenterBusy || !hasSkillsCenter}
-                            onClick={() => startSkillRename(skill)}
-                          >
-                            重命名
-                          </button>
-                          <button
-                            className="text-button danger"
-                            disabled={isSkillsCenterBusy || !hasSkillsCenter}
-                            onClick={() => void deleteSkill(skill)}
-                          >
-                            删除
-                          </button>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                  {!availableCustomSkillCatalog.length && <p className="empty-tip">暂无可用自定义 Skills。</p>}
+                      </article>
+                    )
+                  })}
                 </div>
               </section>
+            )}
+
+            {skillSlotPickerConfig && (
+              <div
+                className="project-create-modal-backdrop skills-slot-picker-backdrop"
+                onMouseDown={(event) => {
+                  if (event.target === event.currentTarget) setSkillSlotPickerSlotKey(null)
+                }}
+              >
+                <section className="project-create-modal skills-slot-picker-modal">
+                  <header className="skills-slot-picker-head">
+                    <strong>{`${skillSlotPickerConfig.title}：新增Skills`}</strong>
+                    <button className="text-button" type="button" onClick={() => setSkillSlotPickerSlotKey(null)}>
+                      关闭
+                    </button>
+                  </header>
+                  <p className="panel-note-tip">
+                    {`当前仅显示「${skillMarketCategoryLabelByKey[skillSlotPickerConfig.category]}」类型。`}
+                  </p>
+                  <div className="skills-slot-picker-list">
+                    {skillSlotPickerItems.length > 0 ? (
+                      skillSlotPickerItems.map((item) => (
+                        <article className="skills-slot-picker-item" key={item.id}>
+                          <div className="skills-slot-picker-item-main">
+                            <strong>{item.name}</strong>
+                            <small>{getSkillMarketDisplayDescription(item)}</small>
+                          </div>
+                          <button
+                            className="primary-button"
+                            type="button"
+                            onClick={() => {
+                              applySkillToSlot(skillSlotPickerConfig.key, item.id)
+                              setSkillSlotPickerSlotKey(null)
+                            }}
+                          >
+                            选择并应用
+                          </button>
+                        </article>
+                      ))
+                    ) : (
+                      <p className="empty-tip">当前类型暂无可用 Skills。</p>
+                    )}
+                  </div>
+                  <div className="skills-slot-picker-actions">
+                    <button
+                      className="text-button"
+                      type="button"
+                      onClick={() => {
+                        openSkillsMarketplacePage(skillSlotPickerConfig.category)
+                        setSkillSlotPickerSlotKey(null)
+                      }}
+                    >
+                      <img className="button-icon button-icon-app-center" src={appCenterIcon} alt="" aria-hidden />
+                      <span>前往应用中心查看全部</span>
+                    </button>
+                  </div>
+                </section>
+              </div>
+            )}
+
+            {showSkillsDiagnosticsPanel && (
+              <div
+                className="project-create-modal-backdrop skills-diagnostics-backdrop"
+                onMouseDown={(event) => {
+                  if (event.target === event.currentTarget) setShowSkillsDiagnosticsPanel(false)
+                }}
+              >
+                <section className="project-create-modal skills-diagnostics-modal">
+                  <header className="skills-diagnostics-modal-header">
+                    <strong>Skills 生效诊断</strong>
+                    <button
+                      className="text-button"
+                      type="button"
+                      onClick={() => setShowSkillsDiagnosticsPanel(false)}
+                    >
+                      关闭
+                    </button>
+                  </header>
+                  <section className="settings-runtime-card">
+                    <header className="settings-runtime-card-header">
+                      <strong>诊断状态</strong>
+                      <small>
+                        {runtimeDiagnostics?.generatedAt
+                          ? `最近请求：${new Date(runtimeDiagnostics.generatedAt).toLocaleString('zh-CN', {
+                              hour12: false
+                            })}`
+                          : '尚未发送请求'}
+                      </small>
+                    </header>
+                    <div className="settings-runtime-status-row">
+                      <span
+                        className={`settings-runtime-pill ${runtimeSkillsLoaded ? 'is-on' : 'is-off'}`}
+                      >
+                        已加载
+                      </span>
+                      <span
+                        className={`settings-runtime-pill ${runtimeSkillsInjected ? 'is-on' : 'is-off'}`}
+                      >
+                        已注入
+                      </span>
+                      <span
+                        className={`settings-runtime-pill ${runtimeSkillsHit ? 'is-on' : 'is-off'}`}
+                      >
+                        已命中
+                      </span>
+                    </div>
+                    <p className="settings-runtime-tip">
+                      已加载：有可用 Skills；已注入：system 中包含 Skills；已命中：本次请求在带 Skills 的上下文中执行。
+                    </p>
+                    <div className="settings-runtime-hash-row">
+                      <small>
+                        Skills Hash：{runtimeDiagnostics?.skillsPromptHash || '暂无'}
+                      </small>
+                      <small>
+                        System Hash：{runtimeDiagnostics?.systemPromptHash || '暂无'}
+                      </small>
+                    </div>
+                    <div className="settings-runtime-preview">
+                      <div className="settings-runtime-preview-head">
+                        <span>注入预览（System）</span>
+                      </div>
+                      <textarea
+                        readOnly
+                        value={runtimeSystemPreview || '暂无注入预览。先执行一次“测试连接”或写作动作。'}
+                      />
+                    </div>
+                    <div className="settings-runtime-log">
+                      <div className="settings-runtime-log-head">最近请求日志</div>
+                      {visibleRuntimeLogs.length > 0 ? (
+                        <ul className="settings-runtime-log-list">
+                          {visibleRuntimeLogs.slice(0, 10).map((log) => (
+                            <li key={log.id}>
+                              <strong>{`${new Date(log.createdAt).toLocaleTimeString('zh-CN', {
+                                hour12: false
+                              })} · ${log.model}`}</strong>
+                              <small>{`${log.provider} · memory ${log.memoryCount} · input ${log.inputChars} chars · skills ${log.skillsInjected ? 'yes' : 'no'}`}</small>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="empty-tip">暂无请求日志。</p>
+                      )}
+                    </div>
+                  </section>
+                </section>
+              </div>
             )}
 
             {activePanel === 'result' && (
@@ -11951,92 +14568,542 @@ ${currentDraft}`
                   <p>助手</p>
                   <h2>生成结果</h2>
                 </div>
-                {isRunning && <div className="loading-line">模型正在生成...</div>}
-                {error && <p className="error-text">{error}</p>}
-                <textarea
-                  value={result}
-                  onChange={(event) => setResult(event.target.value)}
-                  placeholder="输出会显示在这里。"
-                />
-                <div className="result-actions result-actions-main">
-                  <button
-                    className="result-action-btn"
-                    onClick={insertResult}
-                    disabled={!result}
-                    title="插入到光标处"
-                  >
-                    <span className="result-action-icon" aria-hidden>↧</span>
-                    <span className="result-action-label">插入</span>
-                  </button>
-                  <button
-                    className="result-action-btn"
-                    onClick={replaceSelection}
-                    disabled={!result}
-                    title="替换选中内容"
-                  >
-                    <span className="result-action-icon" aria-hidden>⇆</span>
-                    <span className="result-action-label">替换</span>
-                  </button>
-                  <button
-                    className="result-action-btn"
-                    onClick={addMemoryFromResult}
-                    disabled={!result}
-                    title="保存到记忆"
-                  >
-                    <span className="result-action-icon" aria-hidden>◎</span>
-                    <span className="result-action-label">记忆</span>
-                  </button>
-                  <button
-                    className="result-action-btn"
-                    onClick={() => createBackup(result)}
-                    disabled={!result}
-                    title="保存参考"
-                  >
-                    <span className="result-action-icon" aria-hidden>※</span>
-                    <span className="result-action-label">参考</span>
-                  </button>
-                  <button
-                    className="result-action-btn"
-                    onClick={() => void copyResultToClipboard()}
-                    disabled={!result}
-                    title="复制输出"
-                  >
-                    <span className="result-action-icon" aria-hidden>⧉</span>
-                    <span className="result-action-label">复制</span>
-                  </button>
-                  <button
-                    className="result-action-btn"
-                    onClick={appendResultToDraft}
-                    disabled={!result}
-                    title="追加到正文末尾"
-                  >
-                    <span className="result-action-icon" aria-hidden>＋</span>
-                    <span className="result-action-label">追加</span>
-                  </button>
-                  <button
-                    className="result-action-btn"
-                    onClick={overwriteDraftWithResult}
-                    disabled={!result}
-                    title="用输出覆盖正文"
-                  >
-                    <span className="result-action-icon" aria-hidden>▣</span>
-                    <span className="result-action-label">覆盖</span>
-                  </button>
-                  <button
-                    className="result-action-btn"
-                    onClick={clearResultOutput}
-                    disabled={!result}
-                    title="清空输出"
-                  >
-                    <span className="result-action-icon" aria-hidden>×</span>
-                    <span className="result-action-label">清空</span>
-                  </button>
+                <div className="result-status-stack" aria-live="polite">
+                  {isRunning && <div className="loading-line">模型正在生成...</div>}
+                  {error && <p className="error-text">{error}</p>}
                 </div>
+                {isRunning ? (
+                  <div className="result-loading-video-wrap" role="status" aria-live="polite">
+                    <video
+                      className="result-loading-video"
+                      src={magicLoadingVideo}
+                      autoPlay
+                      loop
+                      muted
+                      playsInline
+                    />
+                  </div>
+                ) : (
+                  <>
+                    <textarea
+                      value={result}
+                      onChange={(event) => setResult(event.target.value)}
+                      placeholder="输出会显示在这里。"
+                    />
+                    <div className="result-actions result-actions-main">
+                      <button
+                        className="result-action-btn"
+                        onClick={insertResult}
+                        disabled={!result}
+                        title="插入到光标处"
+                      >
+                        <span className="result-action-icon" aria-hidden>I</span>
+                        <span className="result-action-label">插入</span>
+                      </button>
+                      <button
+                        className="result-action-btn"
+                        onClick={replaceSelection}
+                        disabled={!result}
+                        title="替换选中内容"
+                      >
+                        <span className="result-action-icon" aria-hidden>R</span>
+                        <span className="result-action-label">替换</span>
+                      </button>
+                      <button
+                        className="result-action-btn"
+                        onClick={addMemoryFromResult}
+                        disabled={!result}
+                        title="保存到记忆"
+                      >
+                        <span className="result-action-icon" aria-hidden>M</span>
+                        <span className="result-action-label">记忆</span>
+                      </button>
+                      <button
+                        className="result-action-btn"
+                        onClick={() => createBackup(result)}
+                        disabled={!result}
+                        title="保存参考"
+                      >
+                        <span className="result-action-icon" aria-hidden>S</span>
+                        <span className="result-action-label">参考</span>
+                      </button>
+                      <button
+                        className="result-action-btn"
+                        onClick={() => void copyResultToClipboard()}
+                        disabled={!result}
+                        title="复制输出"
+                      >
+                        <span className="result-action-icon" aria-hidden>C</span>
+                        <span className="result-action-label">复制</span>
+                      </button>
+                      <button
+                        className="result-action-btn"
+                        onClick={appendResultToDraft}
+                        disabled={!result}
+                        title="追加到正文末尾"
+                      >
+                        <span className="result-action-icon" aria-hidden>+</span>
+                        <span className="result-action-label">追加</span>
+                      </button>
+                      <button
+                        className="result-action-btn"
+                        onClick={overwriteDraftWithResult}
+                        disabled={!result}
+                        title="用输出覆盖正文"
+                      >
+                        <span className="result-action-icon" aria-hidden>O</span>
+                        <span className="result-action-label">覆盖</span>
+                      </button>
+                      <button
+                        className="result-action-btn"
+                        onClick={clearResultOutput}
+                        disabled={!result}
+                        title="清空输出"
+                      >
+                        <span className="result-action-icon" aria-hidden>X</span>
+                        <span className="result-action-label">清空</span>
+                      </button>
+                    </div>
+                  </>
+                )}
               </section>
             )}
           </aside>
         </div>
       </section>
+
+      {isOnlineAuthModalOpen && (
+        <div
+          className="project-create-modal-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeOnlineAuthModal()
+          }}
+        >
+          <div className="project-create-modal model-auth-modal" onMouseDown={(event) => event.stopPropagation()}>
+            <h3>{onlineAuthMode === 'register' ? '注册在线账号' : '登录在线账号'}</h3>
+            <div className="settings-online-auth-form">
+              <input
+                autoComplete="username"
+                autoFocus
+                onChange={(event) => setOnlineAccountEmail(event.target.value)}
+                placeholder="输入登录邮箱"
+                type="email"
+                value={onlineAccountEmail}
+              />
+              <input
+                autoComplete={onlineAuthMode === 'register' ? 'new-password' : 'current-password'}
+                onChange={(event) => setOnlineAccountPassword(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    void submitOnlineAccount(onlineAuthMode)
+                  }
+                }}
+                placeholder="输入登录密码"
+                type="password"
+                value={onlineAccountPassword}
+              />
+              <div className="model-auth-modal-actions">
+                <button
+                  className="text-button"
+                  disabled={isOnlineAccountLoading}
+                  onClick={closeOnlineAuthModal}
+                  type="button"
+                >
+                  取消
+                </button>
+                <button
+                  className="primary-button"
+                  disabled={isOnlineAccountLoading}
+                  onClick={() => void submitOnlineAccount(onlineAuthMode)}
+                  type="button"
+                >
+                  {isOnlineAccountLoading
+                    ? onlineAuthMode === 'register'
+                      ? '注册中...'
+                      : '登录中...'
+                    : onlineAuthMode === 'register'
+                      ? '注册'
+                      : '登录'}
+                </button>
+              </div>
+              {onlineAccountNotice &&
+                (isBlockedAccountNotice ? (
+                  <div className="settings-online-account-alert-box" role="alert">
+                    <p className="settings-online-account-note is-alert">😢 {onlineAccountNotice}</p>
+                    <button
+                      className="text-button danger settings-online-account-appeal-button"
+                      onClick={() => void openIssueAppealFromBlocked()}
+                      type="button"
+                    >
+                      申述
+                    </button>
+                  </div>
+                ) : (
+                  <p className="settings-online-account-note">{onlineAccountNotice}</p>
+                ))}
+              {onlineAuthMode === 'register' ? (
+                <p className="settings-online-auth-links">
+                  <span>已有账号？</span>
+                  <button
+                    className="settings-inline-link"
+                    onClick={() => setOnlineAuthMode('login')}
+                    type="button"
+                  >
+                    立即登录
+                  </button>
+                </p>
+              ) : (
+                <p className="settings-online-auth-links">
+                  <button className="settings-inline-link" onClick={openForgotPasswordModal} type="button">
+                    忘记密码？
+                  </button>
+                  <span aria-hidden>|</span>
+                  <span>没有账号？</span>
+                  <button
+                    className="settings-inline-link"
+                    onClick={() => setOnlineAuthMode('register')}
+                    type="button"
+                  >
+                    立即注册
+                  </button>
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isOnlineAuthSuccessModalOpen && (
+        <div
+          className="project-create-modal-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeOnlineAuthSuccessModal()
+          }}
+        >
+          <div className="project-create-modal model-auth-modal auth-success-modal" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="auth-success-hero">
+              <span className="auth-success-badge" aria-hidden>
+                ✓
+              </span>
+              <h3>
+                {onlineAuthSuccessMessage.includes('注册') ? '注册成功' : '登录成功'}
+              </h3>
+              <p className="auth-success-subtitle">
+                {onlineAuthSuccessMessage.includes('注册')
+                  ? `欢迎加入${onlineWelcomeMemberSuffix || ''}`
+                  : `欢迎回来${onlineWelcomeMemberSuffix || ''}`}
+              </p>
+              <p className="auth-success-subtitle auth-success-subtitle-muted">
+                现在就开始今天的创作吧
+              </p>
+            </div>
+            <div className="auth-success-illustration">
+              <img src={okIcon} alt="" aria-hidden />
+            </div>
+            <div className="auth-success-actions">
+              <button className="auth-success-primary" onClick={closeOnlineAuthSuccessModal} type="button">
+                开始创作
+              </button>
+              <button className="auth-success-secondary" onClick={closeOnlineAuthSuccessModal} type="button">
+                稍后再说
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isMembershipModalOpen && (
+        <div
+          className="project-create-modal-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeMembershipModal()
+          }}
+        >
+          <div className="project-create-modal model-auth-modal membership-modal" onMouseDown={(event) => event.stopPropagation()}>
+            <h3>会员中心</h3>
+            <p className="settings-online-account-note">{`当前账号：${onlineAccountSession?.email || '--'}`}</p>
+            <p className="settings-online-account-note">{`当前等级：${onlineMemberTierLabel}`}</p>
+            <div className="membership-plan-list">
+              <article className="membership-plan-card is-normal">
+                <h4>
+                  普通会员
+                  {activeMembershipTier === 'normal' && <span className="membership-current-tag">当前套餐</span>}
+                </h4>
+                <p>默认等级，无法使用在线模型。</p>
+                <p className="membership-plan-meta">{`价格：￥0 / 30天`}</p>
+                <p className="membership-plan-meta">{`额度：￥0`}</p>
+              </article>
+              <article className="membership-plan-card">
+                <h4>
+                  Plus 会员
+                  {activeMembershipTier === 'plus' && <span className="membership-current-tag">当前套餐</span>}
+                </h4>
+                <p>可使用在线模型，适合日常创作。</p>
+                <p className="membership-plan-meta">{`价格：￥39 / 30天`}</p>
+                <p className="membership-plan-meta">{`额度：￥39`}</p>
+                {activeMembershipTierRank < 1 && (
+                  <button
+                    className="primary-button"
+                    disabled={isMembershipApplying}
+                    onClick={() => void applyMembershipPlan('plus')}
+                    type="button"
+                  >
+                    开通充值
+                  </button>
+                )}
+              </article>
+              <article className="membership-plan-card">
+                <h4>
+                  Pro 会员
+                  {activeMembershipTier === 'pro' && <span className="membership-current-tag">当前套餐</span>}
+                </h4>
+                <p>可使用在线模型，适合高频重度创作。</p>
+                <p className="membership-plan-meta">{`价格：￥99 / 30天`}</p>
+                <p className="membership-plan-meta">{`额度：￥99`}</p>
+                {activeMembershipTierRank < 2 && (
+                  <button
+                    className="primary-button"
+                    disabled={isMembershipApplying}
+                    onClick={() => void applyMembershipPlan('pro')}
+                    type="button"
+                  >
+                    开通充值
+                  </button>
+                )}
+              </article>
+            </div>
+            <div className="membership-redeem-box">
+              <label>
+                <span>兑换码</span>
+                <input
+                  autoComplete="off"
+                  onChange={(event) => setMembershipRedeemCode(event.target.value)}
+                  placeholder="输入兑换码"
+                  type="text"
+                  value={membershipRedeemCode}
+                />
+              </label>
+              <div className="model-auth-modal-actions">
+                <button
+                  className="text-button"
+                  disabled={isMembershipApplying}
+                  onClick={closeMembershipModal}
+                  type="button"
+                >
+                  取消
+                </button>
+                <button
+                  className="primary-button"
+                  disabled={isMembershipApplying}
+                  onClick={() => void redeemMembershipCode()}
+                  type="button"
+                >
+                  {isMembershipApplying ? '兑换中...' : '兑换码开通'}
+                </button>
+              </div>
+            </div>
+            {onlineAccountNotice && (
+              <p className={`settings-online-account-note ${isBlockedAccountNotice ? 'is-alert' : ''}`}>
+                {onlineAccountNotice}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {isPasswordResetModalOpen && (
+        <div
+          className="project-create-modal-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closePasswordResetModal()
+          }}
+        >
+          <div className="project-create-modal model-auth-modal" onMouseDown={(event) => event.stopPropagation()}>
+            <h3>重置软件账号密码</h3>
+            <div className="settings-online-auth-form">
+              <input
+                autoComplete="username"
+                autoFocus
+                onChange={(event) => setOnlineAccountEmail(event.target.value)}
+                placeholder="输入注册邮箱"
+                type="email"
+                value={onlineAccountEmail}
+              />
+              <input
+                autoComplete="new-password"
+                onChange={(event) => setResetPasswordValue(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    void submitPasswordReset()
+                  }
+                }}
+                placeholder="输入新密码（至少8位）"
+                type="password"
+                value={resetPasswordValue}
+              />
+              <div className="model-auth-modal-actions">
+                <button
+                  className="text-button"
+                  disabled={isPasswordResetLoading}
+                  onClick={closePasswordResetModal}
+                  type="button"
+                >
+                  取消
+                </button>
+                <button
+                  className="primary-button"
+                  disabled={isPasswordResetLoading}
+                  onClick={() => void submitPasswordReset()}
+                  type="button"
+                >
+                  {isPasswordResetLoading ? '提交中...' : '重置密码'}
+                </button>
+              </div>
+              {onlineAccountNotice && (
+                <p className={`settings-online-account-note ${isBlockedAccountNotice ? 'is-alert' : ''}`}>
+                  {onlineAccountNotice}
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isModelGuideOpen && (
+        <div
+          className="project-create-modal-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeModelGuide()
+          }}
+        >
+          <div className="project-create-modal model-guide-modal" onMouseDown={(event) => event.stopPropagation()}>
+            <h3>{t('请选择“推理模型”', 'Please choose an inference model')}</h3>
+
+            {modelGuideStep === 1 ? (
+              <>
+                <div className="model-guide-options">
+                  <button
+                    className={`model-guide-option model-guide-option-online ${modelGuideDraftSelection === 'online' ? 'is-selected' : ''}`}
+                    onClick={() => toggleModelGuideDraftSelection('online')}
+                    type="button"
+                  >
+                    <div className="model-guide-option-title">
+                      <input
+                        checked={modelGuideDraftSelection === 'online'}
+                        readOnly
+                        type="checkbox"
+                      />
+                      <strong>{t('在线模型（推荐）', 'Online Model (Recommended)')}</strong>
+                    </div>
+                    <small>
+                      {t(
+                        '适合不想折腾，直接用最强在线大模型的专业作者用户。',
+                        'Best for users who want strongest online models without setup.'
+                      )}
+                    </small>
+                  </button>
+                  <button
+                    className={`model-guide-option model-guide-option-local ${modelGuideDraftSelection === 'local' ? 'is-selected' : ''}`}
+                    onClick={() => toggleModelGuideDraftSelection('local')}
+                    type="button"
+                  >
+                    <div className="model-guide-option-title">
+                      <input
+                        checked={modelGuideDraftSelection === 'local'}
+                        readOnly
+                        type="checkbox"
+                      />
+                      <strong>{t('本地模型（免费）', 'Local Model (Free)')}</strong>
+                    </div>
+                    <small>
+                      {t(
+                        '适合有一定技术经验，当前计算机性能强劲，希望使用自己的定制大模型的用户。',
+                        'Best for advanced users with strong local hardware and custom models.'
+                      )}
+                    </small>
+                  </button>
+                </div>
+                <p className="settings-online-account-note">
+                  {t(
+                    '提示：在“模型”窗口中，你可以随时自由切换在线推理和本地推理两种模式。',
+                    'Tip: you can switch between online and local inference anytime in Model settings.'
+                  )}
+                </p>
+              </>
+            ) : (
+              <div className="model-guide-step-panel">
+                {modelGuideDraftSelection === 'online' ? (
+                  <>
+                    <h4>{t('第二步：登录/注册在线账号', 'Step 2: Sign in / Sign up')}</h4>
+                    <p>
+                      {t(
+                        '请在“模型”窗口完成在线账号登录或注册，登录成功后即可使用在线推理。',
+                        'Please complete sign-in or sign-up in Model settings to use online inference.'
+                      )}
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <h4>{t('第二步：下载并开启 Ollama', 'Step 2: Download and run Ollama')}</h4>
+                    <p>
+                      {t(
+                        '安装后只需要保持 Ollama 开启，并在“模型”窗口选择本地模型，即可使用本地推理。',
+                        'After installation, keep Ollama running and choose a local model in Model settings.'
+                      )}
+                    </p>
+                    <div className="model-guide-step-actions">
+                      <button
+                        className="text-button"
+                        onClick={() => window.open(OLLAMA_DOWNLOAD_URL, '_blank', 'noopener,noreferrer')}
+                        type="button"
+                      >
+                        {t('下载 Ollama', 'Download Ollama')}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            <div className="model-guide-footer">
+              <button className="text-button model-guide-later-button" onClick={closeModelGuide} type="button">
+                {t('稍后再说', 'Later')}
+              </button>
+              <div className="model-guide-footer-right">
+                {modelGuideStep === 2 && (
+                  <button
+                    className="text-button"
+                    onClick={() => setModelGuideStep(1)}
+                    type="button"
+                  >
+                    {t('上一步', 'Back')}
+                  </button>
+                )}
+                {modelGuideStep === 1 ? (
+                  <button
+                    className="primary-button"
+                    disabled={!modelGuideDraftSelection}
+                    onClick={goNextModelGuideStep}
+                    type="button"
+                  >
+                    {t('下一步', 'Next')}
+                  </button>
+                ) : modelGuideDraftSelection === 'online' ? (
+                  <button className="primary-button" onClick={applyOnlineModelGuide} type="button">
+                    {t('去登录/注册', 'Go to Sign in / Sign up')}
+                  </button>
+                ) : (
+                  <button className="primary-button" onClick={applyLocalModelGuide} type="button">
+                    {t('完成并切换本地模式', 'Finish with local mode')}
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {customPageRenameDialog && (
         <div
@@ -12100,9 +15167,9 @@ ${currentDraft}`
           {editorContextModelStatusTip ? (
             <div
               className={`editor-context-status-tip is-${editorContextModelStatusState}`}
-            >
-              {editorContextModelStatusTip}
-            </div>
+          >
+            {editorContextModelStatusTip}
+          </div>
           ) : null}
           {editorContextMenuItems.map((item) => {
             if ('divider' in item) {
@@ -12118,7 +15185,12 @@ ${currentDraft}`
                   applyContextMenuCommand(item.run)
                 }}
               >
-                <span>{item.label}</span>
+                <span className="editor-context-item-text">
+                  <span className="editor-context-item-title">{item.label}</span>
+                  {item.detail ? (
+                    <small className="editor-context-item-detail">（{item.detail}）</small>
+                  ) : null}
+                </span>
                 {item.shortcut ? <kbd>{item.shortcut}</kbd> : null}
               </button>
             )
@@ -12332,4 +15404,7 @@ ${currentDraft}`
 }
 
 export default App
+
+
+
 

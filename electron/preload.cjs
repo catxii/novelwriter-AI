@@ -14,6 +14,9 @@ contextBridge.exposeInMainWorld('novelDesktopApi', {
   listOllamaModels(payload) {
     return ipcRenderer.invoke('novel:ollama-models', payload)
   },
+  listOpenAiModels(payload) {
+    return ipcRenderer.invoke('novel:openai-models', payload)
+  },
   signinOllama() {
     return ipcRenderer.invoke('novel:ollama-signin')
   },

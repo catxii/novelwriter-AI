@@ -1,0 +1,495 @@
+.admin-console{
+  min-height:100svh;
+  background:linear-gradient(160deg,#f5f4f1 0%,#f9f8f6 45%,#f2f0ec 100%);
+  color:#1f252a;
+  padding:22px;
+  display:grid;
+  gap:16px;
+  align-content:start;
+  overflow:auto;
+  font-family:"Noto Sans SC","PingFang SC","Microsoft YaHei UI","Segoe UI",sans-serif
+}
+
+.admin-console.is-login{
+  grid-template-rows:auto 1fr;
+  justify-items:center;
+  align-items:start
+}
+
+.admin-console-header{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  width:min(1100px,100%)
+}
+
+.admin-console-header h1{
+  margin:0;
+  font-size:38px;
+  line-height:1.08;
+  font-weight:900;
+  letter-spacing:.03em;
+  color:#171a1f;
+  text-shadow:0 1px 0 rgba(255,255,255,.65);
+  position:relative;
+  padding-bottom:8px
+}
+
+.admin-console-header h1::after{
+  content:"";
+  position:absolute;
+  left:0;
+  bottom:0;
+  width:56%;
+  min-width:160px;
+  height:6px;
+  border-radius:999px;
+  background:linear-gradient(90deg,#eb3f28,#f2963a 78%,transparent)
+}
+
+.admin-console-header-actions{
+  display:flex;
+  align-items:center;
+  gap:8px
+}
+
+.admin-link{
+  color:#4b5763;
+  text-decoration:none;
+  border:1px solid #17171724;
+  border-radius:8px;
+  padding:7px 10px;
+  background:#fff
+}
+
+.admin-btn{
+  border:1px solid #17171729;
+  background:#fff;
+  color:#24303b;
+  border-radius:8px;
+  min-height:36px;
+  padding:7px 12px
+}
+
+.admin-btn-primary{
+  background:#e33b24;
+  border-color:#e33b24;
+  color:#fff
+}
+
+.admin-login-card{
+  background:rgba(255,255,255,.92);
+  backdrop-filter:blur(8px);
+  border:1px solid #1717171f;
+  box-shadow:0 18px 42px rgba(23,28,35,.12);
+  border-radius:16px;
+  width:min(420px,100%);
+  margin-top:8svh;
+  padding:20px;
+  display:grid;
+  gap:12px
+}
+
+.admin-login-card h2{
+  margin:0;
+  font-size:34px;
+  line-height:1.15;
+  letter-spacing:.02em
+}
+
+.admin-login-card p{
+  margin:0;
+  color:#5f6773;
+  font-size:16px
+}
+
+.admin-login-card input{
+  min-height:46px;
+  border:1px solid #17171729;
+  border-radius:10px;
+  padding:10px 12px
+}
+
+.admin-console.is-login .admin-login-card .admin-btn{
+  min-height:44px;
+  font-size:18px;
+  font-weight:700
+}
+
+.admin-toolbar{
+  background:#fff;
+  border:1px solid #1717171f;
+  border-radius:10px;
+  padding:10px;
+  display:flex;
+  align-items:center;
+  gap:10px;
+  flex-wrap:wrap
+}
+
+.admin-page-switch{
+  display:flex;
+  align-items:center;
+  gap:8px
+}
+
+.admin-toolbar label{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  color:#4f5a65;
+  font-size:14px
+}
+
+.admin-toolbar select{
+  min-height:34px;
+  border:1px solid #17171729;
+  border-radius:8px;
+  padding:6px 8px;
+  background:#fff
+}
+
+.admin-summary-grid{
+  display:grid;
+  grid-template-columns:repeat(6,minmax(0,1fr));
+  gap:10px
+}
+
+.admin-summary-grid article{
+  background:#fff;
+  border:1px solid #1717171c;
+  border-radius:10px;
+  padding:10px;
+  display:grid;
+  gap:4px
+}
+
+.admin-summary-grid strong{
+  font-size:22px;
+  line-height:1
+}
+
+.admin-summary-grid span{
+  color:#67736d;
+  font-size:12px
+}
+
+.admin-issues-head{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  padding:10px 12px 0
+}
+
+.admin-issues-head h3{
+  margin:0;
+  font-size:16px;
+  color:#1f2933
+}
+
+.admin-issues-head span{
+  color:#68746f;
+  font-size:12px
+}
+
+.admin-table-wrap{
+  background:#fff;
+  border:1px solid #1717171f;
+  border-radius:12px;
+  overflow:auto
+}
+
+.admin-table-wrap table{
+  width:100%;
+  min-width:1360px;
+  border-collapse:collapse
+}
+
+.admin-table-wrap th,.admin-table-wrap td{
+  border-bottom:1px solid #17171714;
+  padding:8px 10px;
+  text-align:left;
+  white-space:nowrap;
+  font-size:13px
+}
+
+.admin-user-link{
+  border:0;
+  background:transparent;
+  color:#1f7752;
+  padding:0;
+  font:inherit;
+  cursor:pointer;
+  text-decoration:underline
+}
+
+.admin-user-link:hover{
+  color:#15563a
+}
+
+.admin-redeem-tag{
+  margin-top:4px;
+  display:inline-flex;
+  align-items:center;
+  min-height:20px;
+  padding:0 8px;
+  border-radius:999px;
+  border:1px solid #2f9a6b66;
+  background:#2f9a6b14;
+  color:#1f7752;
+  font-size:12px;
+  line-height:1
+}
+
+.admin-table-wrap th{
+  background:#fafaf8;
+  color:#4f5a65;
+  font-weight:600
+}
+
+.admin-error{
+  margin:0;
+  color:#ab3221;
+  background:#e33b2412;
+  border:1px solid #e33b2454;
+  border-radius:8px;
+  padding:8px 10px;
+  font-size:13px
+}
+
+.admin-empty{
+  margin:0;
+  padding:14px;
+  color:#69746e
+}
+
+.admin-detail-backdrop{
+  position:fixed;
+  inset:0;
+  background:rgba(9,12,16,.35);
+  display:grid;
+  place-items:center;
+  z-index:2200;
+  padding:16px
+}
+
+.admin-detail-modal{
+  width:min(1200px,100%);
+  max-height:90svh;
+  background:#fff;
+  border:1px solid #1717171f;
+  border-radius:12px;
+  display:grid;
+  gap:10px;
+  padding:14px;
+  overflow:auto
+}
+
+.admin-issue-detail-modal{
+  overflow:hidden;
+  grid-template-rows:auto minmax(0,1fr)
+}
+
+.admin-detail-head{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px
+}
+
+.admin-detail-head h3{
+  margin:0;
+  font-size:20px
+}
+
+.admin-detail-grid{
+  display:grid;
+  gap:10px;
+  grid-template-columns:repeat(2,minmax(0,1fr))
+}
+
+.admin-issue-detail-grid{
+  display:grid;
+  gap:10px
+}
+
+.admin-issue-detail-body{
+  min-height:0;
+  overflow:auto;
+  padding-right:2px
+}
+
+.admin-detail-card{
+  border:1px solid #1717171f;
+  border-radius:10px;
+  background:#fafaf8;
+  padding:10px;
+  display:grid;
+  gap:8px
+}
+
+.admin-detail-card h4{
+  margin:0;
+  font-size:15px
+}
+
+.admin-detail-card p{
+  margin:0;
+  color:#4f5a65;
+  font-size:13px
+}
+
+.admin-detail-wide{
+  grid-column:1 / -1
+}
+
+.admin-block-toggle{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  font-size:13px;
+  color:#2e3944
+}
+
+.admin-detail-card textarea{
+  min-height:84px;
+  border:1px solid #17171729;
+  border-radius:8px;
+  padding:8px 10px;
+  resize:vertical
+}
+
+.admin-issue-reply-editor{
+  position:sticky;
+  bottom:0;
+  background:#fff;
+  border:1px solid #17171724;
+  box-shadow:0 -8px 22px rgba(19,24,31,.08)
+}
+
+.admin-issue-reply-target{
+  color:#697580!important;
+  font-size:12px!important
+}
+
+.admin-detail-actions{
+  display:flex;
+  justify-content:flex-end
+}
+
+.admin-mini-table-wrap{
+  overflow:auto;
+  border:1px solid #1717171c;
+  border-radius:8px;
+  background:#fff
+}
+
+.admin-mini-table-wrap table{
+  width:100%;
+  min-width:820px;
+  border-collapse:collapse
+}
+
+.admin-mini-table-wrap th,.admin-mini-table-wrap td{
+  border-bottom:1px solid #17171714;
+  padding:6px 8px;
+  text-align:left;
+  white-space:nowrap;
+  font-size:12px
+}
+
+.admin-issue-image-grid{
+  display:grid;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:8px
+}
+
+.admin-issue-image-grid img{
+  width:100%;
+  height:90px;
+  object-fit:cover;
+  border-radius:8px;
+  border:1px solid #17171724;
+  background:#f6f7f9
+}
+
+.admin-issue-comment-list{
+  margin-top:10px;
+  display:grid;
+  gap:8px
+}
+
+.admin-issue-comment-list article{
+  border:1px solid #1717171f;
+  border-radius:8px;
+  background:#fff;
+  padding:8px 9px;
+  display:grid;
+  gap:6px
+}
+
+.admin-issue-comment-list article header{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px
+}
+
+.admin-issue-comment-list article header strong{
+  color:#24303b;
+  font-size:13px
+}
+
+.admin-issue-comment-list article header span{
+  color:#798590;
+  font-size:12px
+}
+
+.admin-issue-comment-list article p{
+  margin:0;
+  color:#424d58;
+  font-size:13px;
+  white-space:pre-wrap;
+  line-height:1.5
+}
+
+.admin-issue-comment-parent{
+  color:#6f7b87;
+  font-size:12px
+}
+
+.admin-issue-comment-actions{
+  display:flex;
+  justify-content:flex-end
+}
+
+@media (width<=1200px){
+  .admin-summary-grid{
+    grid-template-columns:repeat(3,minmax(0,1fr))
+  }
+}
+
+@media (width<=760px){
+  .admin-console{
+    padding:14px
+  }
+  .admin-console-header h1{
+    font-size:30px
+  }
+  .admin-login-card{
+    margin-top:4svh;
+    padding:16px
+  }
+  .admin-login-card h2{
+    font-size:28px
+  }
+  .admin-summary-grid{
+    grid-template-columns:repeat(2,minmax(0,1fr))
+  }
+
+  .admin-issue-image-grid{
+    grid-template-columns:repeat(2,minmax(0,1fr))
+  }
+}

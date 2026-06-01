@@ -1,0 +1,22 @@
+{
+	"$schema": "./node_modules/wrangler/config-schema.json",
+	"name": "novelwriter-scnet-gateway",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-04-29",
+	"workers_dev": true,
+	"observability": {
+		"enabled": true,
+		"head_sampling_rate": 1
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "novelwriter_gateway",
+			"database_id": "7a6004bf-81a5-4db6-8e8d-2edf72829a75"
+		}
+	],
+	"vars": {
+		"DEEPSEEK_BASE_URL": "https://api.deepseek.com",
+		"ALLOWED_ORIGINS": "*"
+	}
+}
